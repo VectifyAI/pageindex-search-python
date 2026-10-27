@@ -48,7 +48,7 @@ client.documents.delete("doc_60a07bcef3094b68806070f2")
 | --- | --- |
 | `PageSearch(api_key=None, base_url=None, timeout=120, max_retries=2)` | The key defaults to `PAGEINDEX_SEARCH_API_KEY`. |
 | `documents.upload(file, wait=True)` | A path, bytes or an open file. Returns a `Document`, ready to search unless `wait=False`. |
-| `search(document, questions, top_k=None, idempotency_key=None)` | Up to 10 questions. Each answer lists the pages likely to help (relevance 0.3 or more; 0.2 or more when fewer than 3 are; possibly none), or exactly `top_k`. A search retried after a timeout is not charged twice. |
+| `search(document, questions, top_k=None, idempotency_key=None)` | Up to 10 questions. Each answer lists the pages likely to help (possibly none), or exactly `top_k`. A search retried after a timeout is not charged twice. |
 | `documents.list(limit=20, after=None)` | Your documents, newest first. Loop over it for every document; `.data` and `.has_more` are one page. |
 | `documents.get(id)`, `documents.delete(document)` | One document; delete one. |
 | `usage(start=None, end=None)` | Uploads, searches and cost by day, your credit and stored pages. |

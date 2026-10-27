@@ -237,8 +237,7 @@ class PageSearch:
                top_k: int | None = None, idempotency_key: str | None = None) -> SearchResult:
         """Ask up to 10 questions about a document. For each, the pages that help answer it, most relevant first.
 
-        Without top_k, each answer lists the pages likely to help: relevance 0.3 or more, or 0.2 or more when fewer
-        than 3 are, and possibly none. With it, exactly top_k pages.
+        Without top_k, each answer lists the pages likely to help, possibly none. With it, exactly top_k pages.
 
         Retries send the same idempotency_key (a new one by default), so a search retried after a timeout is not
         run or charged twice; pass your own to make your own retries safe too.
