@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pageindex-search"
+dynamic = ["version"]
+description = "Python client for Page Search API by PageIndex: find the pages of a PDF that answer your questions."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "PageIndex", email = "support@pageindex.ai" }]
+dependencies = ["httpx>=0.24"]
+keywords = ["pageindex", "search", "pdf", "rag", "llm", "retrieval"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Developers",
+  "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://search.pageindex.ai"
+Documentation = "https://search.pageindex.ai/docs"
+Repository = "https://github.com/VectifyAI/pageindex-search-python"
+Issues = "https://github.com/VectifyAI/pageindex-search-python/issues"
+
+[tool.hatch.version]
+path = "src/pageindex_search/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pageindex_search"]
