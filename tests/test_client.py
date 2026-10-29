@@ -179,8 +179,10 @@ def test_search_one_document_or_across():
     assert answer.documents[0].metadata == {"year": 2026} and answer.documents[0].page_count == 3
     assert [(p.page, p.relevance) for p in answer.pages] == [(2, 0.9)] and result.usage.pages == 3
     pages.search(["q1", "q2"], collection="col_1", filter={"year": 2026}, max_documents=2)
+    pages.search("q", document_top_k=3)
     assert json.loads(sent[1].content) == {"questions": ["q1", "q2"], "collection_id": "col_1",
                                            "filter": {"year": 2026}, "max_documents": 2}
+    assert json.loads(sent[2].content) == {"questions": ["q"], "document_top_k": 3}
     # The call before 0.4 says how it reads now.
     with pytest.raises(TypeError, match="document="):
         pages.search("doc_1", ["q"])

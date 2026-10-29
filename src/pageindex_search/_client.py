@@ -418,7 +418,8 @@ class PageSearch:
 
     def search(self, questions: str | Sequence[str], *before_0_4: Any, document: Document | str | None = None,
                documents: Sequence[Document | str] | None = None, collection: Collection | str | None = None,
-               filter: dict[str, Any] | None = None, max_documents: int | None = None, top_k: int | None = None,
+               filter: dict[str, Any] | None = None, max_documents: int | None = None,
+               document_top_k: int | None = None, top_k: int | None = None,
                idempotency_key: str | None = None) -> SearchResult:
         """Ask up to 10 questions. For each, the pages that help answer it, under the documents they are in.
 
@@ -426,8 +427,8 @@ class PageSearch:
             client.search(questions, collection=filings)    # across documents: these, a collection's, those whose
             client.search(questions)                        # metadata meets filter, or all of yours
 
-        Across documents, the most relevant documents for each question are found first (at most max_documents,
-        default 3) and only their pages searched. Without top_k, each document lists the pages likely to help,
+        Across documents, the most relevant documents for each question are found first and only their pages
+        searched: those likely to answer, at most max_documents (default 3), or exactly document_top_k. Without top_k, each document lists the pages likely to help,
         possibly none; with it, exactly top_k. Retries send the same idempotency_key (a new one by default), so a
         search retried after a timeout is not run or charged twice; pass your own to make your own retries safe too.
         """
@@ -444,6 +445,8 @@ class PageSearch:
             body["filter"] = filter
         if max_documents is not None:
             body["max_documents"] = max_documents
+        if document_top_k is not None:
+            body["document_top_k"] = document_top_k
         if top_k is not None:
             body["top_k"] = top_k
         headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
