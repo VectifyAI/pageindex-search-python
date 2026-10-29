@@ -1,4 +1,6 @@
 """The client against a stand-in for the API: errors it raises. test_live.py runs it against the real one."""
+import json
+
 import httpx
 import pytest
 
@@ -186,3 +188,25 @@ def test_search_one_document_or_across():
     # The call before 0.4 says how it reads now.
     with pytest.raises(TypeError, match="document="):
         pages.search("doc_1", ["q"])
+
+
+def test_schema():
+    sent = []
+    schema = {"object": "schema", "collection_id": "col_1", "documents": 3, "keys": [
+        {"key": "ticker", "types": ["string"], "documents": 3, "values": [{"value": "NVDA", "documents": 2}]},
+        {"key": "year", "types": ["number", "string"], "documents": 3, "min": 2025, "max": 2026,
+         "values": [{"value": "2024", "documents": 1}]},
+        {"key": "audited", "types": ["boolean"], "documents": 1}]}
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json=schema)
+
+    c = client(handler)
+    s = c.collections.schema("col_1")
+    assert sent[0].url.path == "/v1/collections/col_1/schema"
+    assert s.documents == 3 and [k.key for k in s.keys] == ["ticker", "year", "audited"]
+    assert s.keys[1].types == ["number", "string"] and (s.keys[1].min, s.keys[1].max) == (2025, 2026)
+    assert s.keys[0].values == [{"value": "NVDA", "documents": 2}] and s.keys[2].values == []
+    c.documents.schema(filter={"ticker": "NVDA"})
+    assert sent[1].url.path == "/v1/documents/schema" and json.loads(sent[1].url.params["filter"]) == {"ticker": "NVDA"}

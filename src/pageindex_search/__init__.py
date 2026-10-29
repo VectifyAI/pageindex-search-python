@@ -2,11 +2,11 @@
 
 from ._client import (
     Answer, Collection, FoundDocument, CollectionPage, Collections, Document, DocumentAnswer, DocumentMatch, DocumentPage,
-    Documents, DocumentSearchResult, DocumentSearchUsage, Page, PageSearch, PageSearchError, SearchResult,
-    SearchUsage,
+    Documents, DocumentSearchResult, DocumentSearchUsage, Page, PageSearch, PageSearchError, Schema, SchemaKey,
+    SearchResult, SearchUsage,
 )
 from ._version import __version__
 
 __all__ = ["PageSearch", "PageSearchError", "Document", "DocumentPage", "Documents", "SearchResult", "Answer", "Page",
            "SearchUsage", "FoundDocument", "Collection", "CollectionPage", "Collections", "DocumentSearchResult", "DocumentAnswer",
-           "DocumentMatch", "DocumentSearchUsage", "__version__"]
+           "DocumentMatch", "DocumentSearchUsage", "Schema", "SchemaKey", "__version__"]

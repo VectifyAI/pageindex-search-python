@@ -84,6 +84,7 @@ Filters take `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$and` a
 | `documents.list(limit=20, after=None, collection=None, filter=None)` | Your documents, newest first, or a collection's, or those whose metadata meets `filter`. Loop over it for every document; `.data` and `.has_more` are one page. |
 | `documents.get(id)`, `documents.delete(document)` | One document; delete one. |
 | `documents.update(document, metadata=)` | Set metadata keys; `None` removes one. |
+| `collections.schema(collection)`, `documents.schema(collection=None, filter=None)` | The metadata keys the documents have: each key's types, how many documents have it, its least and greatest numbers and commonest strings. Counted as they are now; nothing is enforced. |
 | `collections.create(name)`, `.list()`, `.get(id)`, `.rename(collection, name)`, `.delete(collection)` | Named groups of your documents. Deleting one leaves its documents. |
 | `collections.add(collection, documents)`, `.remove(collection, document)` | Put documents in a collection, or take one out. `documents.upload(..., collection=)` puts a new one in. |
 | `usage(start=None, end=None)` | Uploads, searches and cost by day, your credit and stored pages. |

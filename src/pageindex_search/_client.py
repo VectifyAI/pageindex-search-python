@@ -174,6 +174,30 @@ class DocumentSearchResult:
         return out
 
 
+@dataclass
+class SchemaKey:
+    key: str
+    types: list[str]  # "string", "number", "boolean": more than one when documents disagree
+    documents: int  # how many documents have the key
+    min: float | None = None  # for numbers
+    max: float | None = None
+    values: list[dict[str, Any]] = field(default_factory=list)  # for strings: the commonest, {"value", "documents"}
+
+
+@dataclass
+class Schema:
+    """What your documents' metadata holds, counted from them as they are now: nothing is declared or enforced."""
+    documents: int
+    keys: list[SchemaKey]  # most documents first
+    collection_id: str | None = None
+
+    @classmethod
+    def _from(cls, data: dict[str, Any]) -> "Schema":
+        out = _make(cls, data)
+        out.keys = [_make(SchemaKey, k) for k in data["keys"]]
+        return out
+
+
 class DocumentPage:
     """One page of your documents, newest first: data, and has_more. Iterating it goes on through the pages
     after it, so a for loop over client.documents.list() sees every document."""
@@ -291,6 +315,16 @@ class Documents:
         return DocumentPage(self, [_make(Document, d) for d in page["data"]], page["has_more"], limit,
                             collection, filter)
 
+    def schema(self, *, collection: Collection | str | None = None, filter: dict[str, Any] | None = None) -> Schema:
+        """The metadata keys of your documents, or of those in a collection, or meeting filter: each key's types,
+        how many documents have it, its least and greatest numbers, and its commonest strings."""
+        params: dict[str, Any] = {}
+        if collection is not None:
+            params["collection_id"] = _id(collection)
+        if filter is not None:
+            params["filter"] = json.dumps(filter)
+        return Schema._from(self._client._request("GET", "/documents/schema", params=params))
+
     def delete(self, document: Document | str) -> None:
         """Delete a document and its pages; searches of it then fail."""
         self._client._request("DELETE", f"/documents/{_id(document)}")
@@ -349,6 +383,10 @@ class Collections:
     def rename(self, collection: Collection | str, name: str) -> Collection:
         return _make(Collection, self._client._request("PATCH", f"/collections/{_id(collection)}",
                                                        json={"name": name}))
+
+    def schema(self, collection: Collection | str) -> Schema:
+        """The metadata keys of the collection's documents: see Documents.schema."""
+        return Schema._from(self._client._request("GET", f"/collections/{_id(collection)}/schema"))
 
     def delete(self, collection: Collection | str) -> None:
         """Delete the collection; its documents stay."""
