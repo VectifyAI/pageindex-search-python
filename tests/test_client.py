@@ -74,3 +74,83 @@ def test_old_names_still_work_and_warn():
         assert [d.id for d in pages.documents()] == ["doc_1"]
     with pytest.warns(DeprecationWarning, match="documents.list"):
         assert [d.id for d in pages.iter_documents()] == ["doc_1"]
+
+
+def test_document_search():
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json={
+            "object": "document_search", "id": "srch_1",
+            "results": [{"question": "Who is the CEO?", "documents": [
+                {"document_id": "doc_2", "filename": "b.pdf", "pages": 40, "relevance": 0.9}]}],
+            "failed_documents": [], "processing_documents": ["doc_3"],
+            "usage": {"documents": 2, "questions": 1, "billable_documents": 2, "cost_usd": 0.001,
+                      "balance_usd": 4.999},
+            "seconds": 0.8})
+
+    from pageindex_search import Document
+    doc = Document(id="doc_1", status="ready")
+    result = client(handler).documents.search("Who is the CEO?", document_ids=[doc, "doc_2"], top_k=1)
+    import json
+    assert sent[0].url.path == "/v1/documents/search" and sent[0].headers["idempotency-key"]
+    assert json.loads(sent[0].content) == {"questions": ["Who is the CEO?"], "document_ids": ["doc_1", "doc_2"],
+                                           "top_k": 1}
+    assert result.results[0].documents[0].document_id == "doc_2" and result.results[0].documents[0].pages == 40
+    assert result.processing_documents == ["doc_3"] and result.usage.billable_documents == 2
+
+
+def test_collections():
+    sent = []
+    col = {"object": "collection", "id": "col_1", "name": "Reports", "documents": 2, "created_at": "2026-10-29T00:00:00Z"}
+    doc = {"object": "document", "id": "doc_1", "status": "ready", "filename": "a.pdf", "pages": 1, "bytes": 4,
+           "created_at": "2026-10-27T00:00:00Z"}
+
+    def handler(request):
+        sent.append(request)
+        if request.url.path == "/v1/documents" and request.method == "POST":
+            return httpx.Response(200, json=doc)
+        if request.url.path == "/v1/documents":
+            return httpx.Response(200, json={"object": "list", "data": [doc], "has_more": False})
+        return httpx.Response(200, json=col)
+
+    pages = client(handler)
+    made = pages.collections.create("Reports")
+    assert made.id == "col_1" and made.documents == 2
+    pages.collections.add(made, ["doc_1", "doc_2"])
+    pages.collections.remove(made, "doc_2")
+    pages.documents.upload(b"%PDF-1.4", collection=made, wait=False)
+    assert [d.id for d in pages.documents.list(collection="col_1")] == ["doc_1"]
+    import json
+    assert (sent[1].url.path, json.loads(sent[1].content)) == ("/v1/collections/col_1/documents",
+                                                               {"document_ids": ["doc_1", "doc_2"]})
+    assert (sent[2].method, sent[2].url.path) == ("DELETE", "/v1/collections/col_1/documents/doc_2")
+    assert b'name="collection_id"' in sent[3].content and b"col_1" in sent[3].content
+    assert sent[4].url.params["collection_id"] == "col_1"
+
+
+def test_metadata_and_filters():
+    sent = []
+    doc = {"object": "document", "id": "doc_1", "status": "ready", "filename": "a.pdf", "pages": 1, "bytes": 4,
+           "metadata": {"year": 2018}, "created_at": "2026-10-27T00:00:00Z"}
+
+    def handler(request):
+        sent.append(request)
+        if request.url.path == "/v1/documents" and request.method == "GET":
+            return httpx.Response(200, json={"object": "list", "data": [doc], "has_more": False})
+        if request.url.path == "/v1/documents/search":
+            return httpx.Response(200, json={"object": "document_search", "id": "s", "results": [],
+                                             "failed_documents": [], "processing_documents": [], "usage": None})
+        return httpx.Response(200, json=doc)
+
+    import json
+    pages = client(handler)
+    assert pages.documents.upload(b"%PDF-1.4", metadata={"year": 2018}, wait=False).metadata == {"year": 2018}
+    pages.documents.update("doc_1", metadata={"note": None})
+    assert [d.metadata for d in pages.documents.list(filter={"year": {"$gte": 2015}})] == [{"year": 2018}]
+    pages.documents.search("q", filter={"ticker": "MMM"})
+    assert b'name="metadata"' in sent[0].content and b'{"year": 2018}' in sent[0].content
+    assert (sent[1].method, json.loads(sent[1].content)) == ("PATCH", {"metadata": {"note": None}})
+    assert json.loads(sent[2].url.params["filter"]) == {"year": {"$gte": 2015}}
+    assert json.loads(sent[3].content)["filter"] == {"ticker": "MMM"}

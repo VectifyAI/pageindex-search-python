@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 import os
 import time
 import uuid
@@ -59,6 +60,15 @@ class Document:
     created_at: str | None = None
     error: str | None = None
     duplicate: bool = False  # the same file was already uploaded; this is that document
+    metadata: dict[str, Any] = field(default_factory=dict)  # your own keys: strings, numbers and booleans
+
+
+@dataclass
+class Collection:
+    id: str
+    name: str
+    documents: int = 0  # how many documents it holds
+    created_at: str | None = None
 
 
 @dataclass
@@ -99,17 +109,61 @@ class SearchResult:
         return out
 
 
+@dataclass
+class DocumentMatch:
+    document_id: str
+    relevance: float  # from 0 to 1: how likely the document holds what answers the question
+    filename: str | None = None
+    pages: int | None = None
+
+
+@dataclass
+class DocumentAnswer:
+    question: str
+    documents: list[DocumentMatch]  # most relevant first
+
+
+@dataclass
+class DocumentSearchUsage:
+    documents: int
+    questions: int
+    billable_documents: int  # each priced as a page
+    cost_usd: float
+    balance_usd: float
+
+
+@dataclass
+class DocumentSearchResult:
+    id: str
+    results: list[DocumentAnswer]  # one for each question, in the order asked
+    failed_documents: list[str] = field(default_factory=list)  # could not be judged just now; not charged
+    processing_documents: list[str] = field(default_factory=list)  # still being made; not searched
+    usage: DocumentSearchUsage | None = None
+    seconds: float | None = None
+
+    @classmethod
+    def _from(cls, data: dict[str, Any]) -> "DocumentSearchResult":
+        out = _make(cls, data)
+        out.results = [DocumentAnswer(a["question"], [_make(DocumentMatch, d) for d in a["documents"]])
+                       for a in data["results"]]
+        out.usage = _make(DocumentSearchUsage, data["usage"]) if data.get("usage") else None
+        return out
+
+
 class DocumentPage:
     """One page of your documents, newest first: data, and has_more. Iterating it goes on through the pages
     after it, so a for loop over client.documents.list() sees every document."""
 
-    def __init__(self, documents: "Documents", data: list[Document], has_more: bool, limit: int):
+    def __init__(self, documents: "Documents", data: list[Document], has_more: bool, limit: int,
+                 collection: Collection | str | None = None, filter: dict[str, Any] | None = None):
         self._documents, self.data, self.has_more, self._limit = documents, data, has_more, limit
+        self._collection, self._filter = collection, filter
 
     def next_page(self) -> DocumentPage | None:
         if not self.has_more or not self.data:
             return None
-        return self._documents.list(limit=self._limit, after=self.data[-1].id)
+        return self._documents.list(limit=self._limit, after=self.data[-1].id, collection=self._collection,
+                                    filter=self._filter)
 
     def __iter__(self) -> Iterator[Document]:
         page: DocumentPage | None = self
@@ -118,15 +172,36 @@ class DocumentPage:
             page = page.next_page()
 
 
+class CollectionPage:
+    """One page of your collections, newest first: data, and has_more. Iterating it goes on through the pages
+    after it, as DocumentPage does."""
+
+    def __init__(self, collections: "Collections", data: list[Collection], has_more: bool, limit: int):
+        self._collections, self.data, self.has_more, self._limit = collections, data, has_more, limit
+
+    def next_page(self) -> CollectionPage | None:
+        if not self.has_more or not self.data:
+            return None
+        return self._collections.list(limit=self._limit, after=self.data[-1].id)
+
+    def __iter__(self) -> Iterator[Collection]:
+        page: CollectionPage | None = self
+        while page is not None:
+            yield from page.data
+            page = page.next_page()
+
+
 class Documents:
-    """Your documents: client.documents.upload(file), .get(id), .list(), .delete(document)."""
+    """Your documents: client.documents.upload(file), .get(id), .list(), .delete(document), and .search(questions)
+    to find which of them answer a question."""
 
     def __init__(self, client: "PageSearch"):
         self._client = client
 
-    def upload(self, file: FileInput, *, filename: str | None = None, wait: bool = True,
-               timeout: float = 300.0) -> Document:
+    def upload(self, file: FileInput, *, filename: str | None = None, collection: Collection | str | None = None,
+               metadata: dict[str, Any] | None = None, wait: bool = True, timeout: float = 300.0) -> Document:
         """Upload a PDF: a path, bytes or an open binary file. Uploading the same file again returns its document.
+        With collection, the document is put in that collection too; metadata is set on it, as update() does.
 
         With wait (the default), returns once the document is ready to search, or raises if it failed; most are
         ready in a second or two. Without it, returns at once; the document may still be processing.
@@ -141,7 +216,12 @@ class Documents:
         else:
             data = file.read()
             filename = filename or Path(getattr(file, "name", "") or "document.pdf").name
-        response = self._client._request("POST", "/documents",
+        form: dict[str, str] = {}
+        if collection is not None:
+            form["collection_id"] = _id(collection)
+        if metadata is not None:
+            form["metadata"] = json.dumps(metadata)
+        response = self._client._request("POST", "/documents", data=form or None,
                                          files={"file": (filename or "document.pdf", data, "application/pdf")})
         doc = _make(Document, response)
         return self.wait(doc, timeout=timeout) if wait else doc
@@ -162,8 +242,16 @@ class Documents:
     def get(self, document_id: str) -> Document:
         return _make(Document, self._client._request("GET", f"/documents/{document_id}"))
 
-    def list(self, *, limit: int = 20, after: str | None = None) -> DocumentPage:
-        """Your documents, newest first, limit (1 to 100) a page; after: the last id of the page before.
+    def update(self, document: Document | str, *, metadata: dict[str, Any]) -> Document:
+        """Set metadata keys (strings, numbers or booleans; at most 16 keys); a key set to None is removed, and keys
+        not named stay."""
+        return _make(Document, self._client._request("PATCH", f"/documents/{_id(document)}",
+                                                     json={"metadata": metadata}))
+
+    def list(self, *, limit: int = 20, after: str | None = None, collection: Collection | str | None = None,
+             filter: dict[str, Any] | None = None) -> DocumentPage:
+        """Your documents, newest first, or those in a collection, or whose metadata meets filter (such as
+        {"year": {"$gte": 2020}}); limit (1 to 100) a page; after: the last id of the page before.
 
             for doc in client.documents.list():          # every document, a page at a time
             page = client.documents.list(limit=10)       # one page: page.data, page.has_more
@@ -171,16 +259,86 @@ class Documents:
         params: dict[str, Any] = {"limit": limit}
         if after:
             params["after"] = after
+        if collection is not None:
+            params["collection_id"] = _id(collection)
+        if filter is not None:
+            params["filter"] = json.dumps(filter)
         page = self._client._request("GET", "/documents", params=params)
-        return DocumentPage(self, [_make(Document, d) for d in page["data"]], page["has_more"], limit)
+        return DocumentPage(self, [_make(Document, d) for d in page["data"]], page["has_more"], limit,
+                            collection, filter)
 
     def delete(self, document: Document | str) -> None:
         """Delete a document and its pages; searches of it then fail."""
         self._client._request("DELETE", f"/documents/{_id(document)}")
 
+    def search(self, questions: str | Sequence[str], *, document_ids: Sequence[Document | str] | None = None,
+               collection: Collection | str | None = None, filter: dict[str, Any] | None = None,
+               top_k: int | None = None, idempotency_key: str | None = None) -> DocumentSearchResult:
+        """Ask up to 10 questions of your documents. For each, the documents likely to hold the answer, most
+        relevant first; then search those documents' pages with client.search().
+
+        Every document of yours (up to 1,000), only those in document_ids, or only those in a collection and those
+        whose metadata meets filter. Without
+        top_k, each answer lists the documents likely to help, possibly none; with it, exactly top_k. Each document
+        is priced as a page. Retries send the same idempotency_key, as client.search() does.
+        """
+        body: dict[str, Any] = {"questions": [questions] if isinstance(questions, str) else list(questions)}
+        if document_ids is not None:
+            body["document_ids"] = [_id(d) for d in document_ids]
+        if collection is not None:
+            body["collection_id"] = _id(collection)
+        if filter is not None:
+            body["filter"] = filter
+        if top_k is not None:
+            body["top_k"] = top_k
+        headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
+        return DocumentSearchResult._from(self._client._request("POST", "/documents/search", json=body,
+                                                                headers=headers))
+
     def __call__(self, *, limit: int = 20, after: str | None = None) -> builtins.list[Document]:
         _renamed("client.documents()", "client.documents.list().data")
         return self.list(limit=limit, after=after).data
+
+
+class Collections:
+    """Named groups of your documents, to search within: client.collections.create(name), .list(), .get(id),
+    .rename(collection, name), .delete(collection), .add(collection, documents), .remove(collection, document).
+    A document may be in many collections; deleting a collection leaves its documents."""
+
+    def __init__(self, client: "PageSearch"):
+        self._client = client
+
+    def create(self, name: str) -> Collection:
+        return _make(Collection, self._client._request("POST", "/collections", json={"name": name}))
+
+    def list(self, *, limit: int = 20, after: str | None = None) -> CollectionPage:
+        """Your collections, newest first, limit (1 to 100) a page. Loop over it for every collection."""
+        params: dict[str, Any] = {"limit": limit}
+        if after:
+            params["after"] = after
+        page = self._client._request("GET", "/collections", params=params)
+        return CollectionPage(self, [_make(Collection, c) for c in page["data"]], page["has_more"], limit)
+
+    def get(self, collection_id: str) -> Collection:
+        return _make(Collection, self._client._request("GET", f"/collections/{collection_id}"))
+
+    def rename(self, collection: Collection | str, name: str) -> Collection:
+        return _make(Collection, self._client._request("PATCH", f"/collections/{_id(collection)}",
+                                                       json={"name": name}))
+
+    def delete(self, collection: Collection | str) -> None:
+        """Delete the collection; its documents stay."""
+        self._client._request("DELETE", f"/collections/{_id(collection)}")
+
+    def add(self, collection: Collection | str, documents: Sequence[Document | str]) -> Collection:
+        """Put documents in the collection (up to 1,000 at once); those already in it stay."""
+        return _make(Collection, self._client._request("POST", f"/collections/{_id(collection)}/documents",
+                                                       json={"document_ids": [_id(d) for d in documents]}))
+
+    def remove(self, collection: Collection | str, document: Document | str) -> Collection:
+        """Take a document out of the collection; the document stays."""
+        return _make(Collection, self._client._request(
+            "DELETE", f"/collections/{_id(collection)}/documents/{_id(document)}"))
 
 
 def _renamed(old: str, new: str) -> None:
@@ -208,6 +366,7 @@ class PageSearch:
         self._http = http_client or httpx.Client(timeout=timeout)
         self._headers = {"Authorization": f"Bearer {api_key}", "User-Agent": f"pageindex-search-python/{__version__}"}
         self.documents = Documents(self)
+        self.collections = Collections(self)
 
     # The names before 0.2, kept for a while.
 
@@ -282,8 +441,8 @@ class PageSearch:
         self.close()
 
 
-def _id(document: Document | str) -> str:
-    return document.id if isinstance(document, Document) else document
+def _id(item: Document | Collection | str) -> str:
+    return item if isinstance(item, str) else item.id
 
 
 def _json(response: httpx.Response) -> dict[str, Any]:
