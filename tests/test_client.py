@@ -35,12 +35,13 @@ def test_search_retries_with_one_idempotency_key():
         keys.append(request.headers.get("idempotency-key"))
         if len(keys) == 1:
             return httpx.Response(503, json={"error": {"code": "search_unavailable", "message": "busy"}})
-        return httpx.Response(200, json={"object": "search", "id": "srch_1", "document_id": "doc_1", "results": [],
-                                         "failed_pages": [], "usage": None, "seconds": 0.1})
+        return httpx.Response(200, json={"object": "search", "id": "srch_1", "results": [],
+                                         "failed_documents": [], "processing_documents": [], "usage": None,
+                                         "seconds": 0.1})
 
     pages = PageSearch(api_key="pis_live_x", max_retries=1,
                        http_client=httpx.Client(transport=httpx.MockTransport(handler)))
-    pages.search("doc_1", "q")
+    pages.search("q", document="doc_1")
     assert len(keys) == 2 and keys[0] and keys[0] == keys[1]
 
 
@@ -154,3 +155,32 @@ def test_metadata_and_filters():
     assert (sent[1].method, json.loads(sent[1].content)) == ("PATCH", {"metadata": {"note": None}})
     assert json.loads(sent[2].url.params["filter"]) == {"year": {"$gte": 2015}}
     assert json.loads(sent[3].content)["filter"] == {"ticker": "MMM"}
+
+
+def test_search_one_document_or_across():
+    import json
+    sent = []
+    found = {"document_id": "doc_1", "filename": "a.pdf", "page_count": 3, "metadata": {"year": 2026},
+             "relevance": None, "pages": [{"page": 2, "relevance": 0.9}], "failed_pages": []}
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json={"object": "search", "id": "srch_1",
+                                         "results": [{"question": "q", "documents": [found]}],
+                                         "failed_documents": [], "processing_documents": [],
+                                         "usage": {"documents": 0, "pages": 3, "questions": 1, "cost_usd": 0.0015,
+                                                   "balance_usd": 4.9}, "seconds": 0.5})
+
+    pages = client(handler)
+    result = pages.search("q", document="doc_1", top_k=2)
+    assert sent[0].url.path == "/v1/search"
+    assert json.loads(sent[0].content) == {"questions": ["q"], "document_id": "doc_1", "top_k": 2}
+    answer = result.results[0]
+    assert answer.documents[0].metadata == {"year": 2026} and answer.documents[0].page_count == 3
+    assert [(p.page, p.relevance) for p in answer.pages] == [(2, 0.9)] and result.usage.pages == 3
+    pages.search(["q1", "q2"], collection="col_1", filter={"year": 2026}, max_documents=2)
+    assert json.loads(sent[1].content) == {"questions": ["q1", "q2"], "collection_id": "col_1",
+                                           "filter": {"year": 2026}, "max_documents": 2}
+    # The call before 0.4 says how it reads now.
+    with pytest.raises(TypeError, match="document="):
+        pages.search("doc_1", ["q"])

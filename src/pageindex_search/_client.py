@@ -1,4 +1,4 @@
-"""The Page Search API client: upload a PDF, then search its pages with up to 10 questions at once."""
+"""The Page Search API client: upload PDFs, then search their pages with up to 10 questions at once."""
 
 from __future__ import annotations
 
@@ -78,16 +78,33 @@ class Page:
 
 
 @dataclass
+class FoundDocument:
+    """A document a search found pages in, with those pages."""
+    document_id: str
+    pages: list[Page]  # the pages that help answer the question, most relevant first
+    filename: str | None = None
+    page_count: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    relevance: float | None = None  # how likely it holds the answer; None when the search named it (document=)
+    failed_pages: list[int] = field(default_factory=list)  # pages that could not be read; not charged
+
+
+@dataclass
 class Answer:
     question: str
-    pages: list[Page]  # most relevant first
+    documents: list[FoundDocument]  # most relevant first; one when the search named a document
+
+    @property
+    def pages(self) -> list[Page]:
+        """The pages of the first document: all there is when the search named one document."""
+        return self.documents[0].pages if self.documents else []
 
 
 @dataclass
 class SearchUsage:
-    pages: int
+    documents: int  # documents judged to find which to open (none when the search named one)
+    pages: int  # pages searched in the documents opened
     questions: int
-    billable_pages: int
     cost_usd: float
     balance_usd: float
 
@@ -95,18 +112,24 @@ class SearchUsage:
 @dataclass
 class SearchResult:
     id: str
-    document_id: str
     results: list[Answer]  # one for each question, in the order asked
-    failed_pages: list[int] = field(default_factory=list)  # pages that could not be read; not charged
+    failed_documents: list[str] = field(default_factory=list)
+    processing_documents: list[str] = field(default_factory=list)  # still being made; not searched
     usage: SearchUsage | None = None
     seconds: float | None = None
 
     @classmethod
     def _from(cls, data: dict[str, Any]) -> "SearchResult":
         out = _make(cls, data)
-        out.results = [Answer(a["question"], [_make(Page, p) for p in a["pages"]]) for a in data["results"]]
+        out.results = [Answer(a["question"], [_found(d) for d in a["documents"]]) for a in data["results"]]
         out.usage = _make(SearchUsage, data["usage"]) if data.get("usage") else None
         return out
+
+
+def _found(data: dict[str, Any]) -> FoundDocument:
+    out = _make(FoundDocument, data)
+    out.pages = [_make(Page, p) for p in data["pages"]]
+    return out
 
 
 @dataclass
@@ -351,7 +374,7 @@ class PageSearch:
 
         client = PageSearch()  # reads PAGEINDEX_SEARCH_API_KEY
         doc = client.documents.upload("report.pdf")
-        result = client.search(doc, ["What was revenue in 2024?"])
+        result = client.search(["What was revenue in 2024?"], document=doc)
         for answer in result.results:
             print(answer.question, [(p.page, p.relevance) for p in answer.pages])
     """
@@ -393,20 +416,38 @@ class PageSearch:
 
     # Search
 
-    def search(self, document: Document | str, questions: str | Sequence[str], *,
-               top_k: int | None = None, idempotency_key: str | None = None) -> SearchResult:
-        """Ask up to 10 questions about a document. For each, the pages that help answer it, most relevant first.
+    def search(self, questions: str | Sequence[str], *before_0_4: Any, document: Document | str | None = None,
+               documents: Sequence[Document | str] | None = None, collection: Collection | str | None = None,
+               filter: dict[str, Any] | None = None, max_documents: int | None = None, top_k: int | None = None,
+               idempotency_key: str | None = None) -> SearchResult:
+        """Ask up to 10 questions. For each, the pages that help answer it, under the documents they are in.
 
-        Without top_k, each answer lists the pages likely to help, possibly none. With it, exactly top_k pages.
+            client.search(questions, document=doc)          # one document's pages
+            client.search(questions, collection=filings)    # across documents: these, a collection's, those whose
+            client.search(questions)                        # metadata meets filter, or all of yours
 
-        Retries send the same idempotency_key (a new one by default), so a search retried after a timeout is not
-        run or charged twice; pass your own to make your own retries safe too.
+        Across documents, the most relevant documents for each question are found first (at most max_documents,
+        default 3) and only their pages searched. Without top_k, each document lists the pages likely to help,
+        possibly none; with it, exactly top_k. Retries send the same idempotency_key (a new one by default), so a
+        search retried after a timeout is not run or charged twice; pass your own to make your own retries safe too.
         """
+        if before_0_4 or isinstance(questions, Document):
+            raise TypeError("client.search(document, questions) is now client.search(questions, document=document)")
         body: dict[str, Any] = {"questions": [questions] if isinstance(questions, str) else list(questions)}
+        if document is not None:
+            body["document_id"] = _id(document)
+        if documents is not None:
+            body["document_ids"] = [_id(d) for d in documents]
+        if collection is not None:
+            body["collection_id"] = _id(collection)
+        if filter is not None:
+            body["filter"] = filter
+        if max_documents is not None:
+            body["max_documents"] = max_documents
         if top_k is not None:
             body["top_k"] = top_k
         headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
-        return SearchResult._from(self._request("POST", f"/documents/{_id(document)}/search", json=body, headers=headers))
+        return SearchResult._from(self._request("POST", "/search", json=body, headers=headers))
 
     # Account
 

@@ -18,13 +18,13 @@ def test_upload_search_and_usage():
         assert doc.status == "ready" and doc.pages
         assert client.documents.upload(PDF).id == doc.id  # the same file is the same document
 
-        result = client.search(doc, ["What is this document about?", "Who wrote it?"], top_k=3)
+        result = client.search(["What is this document about?", "Who wrote it?"], document=doc, top_k=3)
         assert [a.question for a in result.results] == ["What is this document about?", "Who wrote it?"]
         assert all(len(a.pages) == 3 for a in result.results)
         pages = result.results[0].pages
         assert all(1 <= p.page <= doc.pages and 0 <= p.relevance <= 1 for p in pages)
         assert pages == sorted(pages, key=lambda p: -p.relevance)
-        assert result.usage.billable_pages + len(result.failed_pages) == doc.pages
+        assert result.usage.pages == doc.pages and result.usage.documents == 0
 
         assert any(d.id == doc.id for d in client.documents.list(limit=100).data)
         assert "balance_usd" in client.usage()
