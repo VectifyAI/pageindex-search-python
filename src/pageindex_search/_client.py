@@ -115,6 +115,7 @@ class DocumentMatch:
     relevance: float  # from 0 to 1: how likely the document holds what answers the question
     filename: str | None = None
     pages: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
