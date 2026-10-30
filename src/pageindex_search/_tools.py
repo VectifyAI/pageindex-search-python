@@ -115,6 +115,33 @@ class Tools:
         return [{"type": "function", "function": {"name": d["name"], "description": d["description"],
                                                   "parameters": d["input_schema"]}} for d in self.definitions]
 
+    def openai_agents(self) -> list[Any]:
+        """The tools as OpenAI Agents SDK FunctionTools, for Agent(tools=...): pictures of pages go to the model as
+        images. Needs openai-agents (pip install "pageindex-search[agents]")."""
+        import asyncio
+
+        try:
+            from agents import FunctionTool, ToolOutputImage, ToolOutputText
+        except ImportError:
+            raise ImportError('tools.openai_agents() needs openai-agents: pip install "pageindex-search[agents]"') from None
+
+        def tool(definition: dict[str, Any]) -> Any:
+            async def invoke(ctx: Any, args: str) -> Any:
+                out = await asyncio.to_thread(self.run, definition["name"], json.loads(args or "{}"))
+                if not out.images:
+                    return out.text
+                parts: list[Any] = [ToolOutputText(text=out.text)]
+                for image in out.images:
+                    parts += [ToolOutputText(text=f"Page {image.page} of {image.document_id}:"),
+                              ToolOutputImage(image_url=image.data_url)]
+                return parts
+            # filter is any object, which a strict schema cannot hold.
+            return FunctionTool(name=definition["name"], description=definition["description"],
+                                params_json_schema=definition["input_schema"], on_invoke_tool=invoke,
+                                strict_json_schema=False)
+
+        return [tool(d) for d in self.definitions]
+
     def _search_documents(self) -> dict[str, Any]:
         return {
             "name": "search_documents",

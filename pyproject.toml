@@ -26,6 +26,9 @@ Documentation = "https://search.pageindex.ai/docs"
 Repository = "https://github.com/VectifyAI/pageindex-search-python"
 Issues = "https://github.com/VectifyAI/pageindex-search-python/issues"
 
+[project.optional-dependencies]
+agents = ["openai-agents>=0.24; python_version >= '3.10'"]
+
 [tool.hatch.version]
 path = "src/pageindex_search/_version.py"
 

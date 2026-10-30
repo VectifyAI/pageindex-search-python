@@ -283,3 +283,24 @@ def test_tools():
     assert tools.run("search_documents", {"question": "q"}).anthropic().startswith('{"documents"')
     assert json.loads(tools.run_text("read_pages", {"document_id": "doc_1", "pages": [99]})) == {"error": "There is no page 99."}
     assert "error" in json.loads(tools.run_text("read_pages", {"document_id": "doc_1"}))
+
+
+def test_openai_agents_tools():
+    agents = pytest.importorskip("agents")
+    schema = {"object": "schema", "collection_id": None, "documents": 1, "keys": []}
+
+    def handler(request):
+        if request.url.path.endswith("/schema"):
+            return httpx.Response(200, json=schema)
+        if request.url.path.endswith("/image"):
+            return httpx.Response(200, content=b"\x89PNG")
+        return httpx.Response(200, json={"object": "list", "document_id": "doc_1", "data": [
+            {"object": "page", "page": 7, "read": "image", "text": ""}]})
+
+    import asyncio
+    tools = client(handler).tools().openai_agents()
+    assert [t.name for t in tools] == ["search_documents", "search_pages", "read_pages", "view_pages"]
+    assert all(isinstance(t, agents.FunctionTool) and not t.strict_json_schema for t in tools)
+    out = asyncio.run(tools[2].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
+    assert isinstance(out[0], agents.ToolOutputText) and out[1].text == "Page 7 of doc_1:"
+    assert out[2].image_url.startswith("data:image/png;base64,")

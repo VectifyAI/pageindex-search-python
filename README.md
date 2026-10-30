@@ -97,7 +97,15 @@ for block in response.content:
         content = tools.run(block.name, block.input).anthropic()  # the tool_result content
 ```
 
-For OpenAI, pass `tools.openai`; `tools.run()` gives `.text` and `.images`, each image with `.data_url`.
+For OpenAI, pass `tools.openai`; `tools.run()` gives `.text` and `.images`, each image with `.data_url`. With the
+OpenAI Agents SDK (`pip install "pageindex-search[agents]"`), `tools.openai_agents()` gives the tools ready to use:
+
+```python
+from agents import Agent, Runner
+
+agent = Agent(name="Reports", instructions="Answer from the documents.", tools=tools.openai_agents())
+print(Runner.run_sync(agent, "What was capital expenditure in 2018?").final_output)
+```
 
 ## Reference
 
@@ -110,7 +118,7 @@ For OpenAI, pass `tools.openai`; `tools.run()` gives `.text` and `.images`, each
 | `documents.list(limit=20, after=None, collection=None, filter=None)` | Your documents, newest first, or a collection's, or those whose metadata meets `filter`. Loop over it for every document; `.data` and `.has_more` are one page. |
 | `documents.get(id)`, `documents.delete(document)` | One document; delete one. |
 | `documents.pages(document, pages)`, `documents.page_image(document, page)` | The text of up to 20 pages, each with how it is best read; a page as PNG bytes. |
-| `tools(collection=None, filter=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, and `.run(name, input)`. |
+| `tools(collection=None, filter=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, `.openai_agents()` (OpenAI Agents SDK), and `.run(name, input)`. |
 | `documents.update(document, metadata=)` | Set metadata keys; `None` removes one. |
 | `collections.schema(collection)`, `documents.schema(collection=None, filter=None)` | The metadata keys the documents have: each key's types, how many documents have it, its least and greatest numbers and commonest strings. Counted as they are now; nothing is enforced. |
 | `collections.create(name)`, `.list()`, `.get(id)`, `.rename(collection, name)`, `.delete(collection)` | Named groups of your documents. Deleting one leaves its documents. |
