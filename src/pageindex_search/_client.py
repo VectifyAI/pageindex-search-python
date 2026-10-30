@@ -75,6 +75,8 @@ class Collection:
 class Page:
     page: int  # numbered from 1
     relevance: float  # from 0 to 1: how likely the page helps answer the question
+    read: str | None = None  # "text", or "image": a picture, such as a scan or a chart, whose text may be incomplete
+    text: str | None = None  # with include_text=True
 
 
 @dataclass
@@ -172,6 +174,13 @@ class DocumentSearchResult:
                        for a in data["results"]]
         out.usage = _make(DocumentSearchUsage, data["usage"]) if data.get("usage") else None
         return out
+
+
+@dataclass
+class PageText:
+    page: int  # numbered from 1
+    text: str
+    read: str | None = None  # "text", or "image": a picture, such as a scan or a chart, whose text may be incomplete
 
 
 @dataclass
@@ -325,6 +334,16 @@ class Documents:
             params["filter"] = json.dumps(filter)
         return Schema._from(self._client._request("GET", "/documents/schema", params=params))
 
+    def pages(self, document: Document | str, pages: Sequence[int]) -> builtins.list[PageText]:
+        """The text of up to 20 pages, numbered from 1, in the order named."""
+        data = self._client._request("GET", f"/documents/{_id(document)}/pages",
+                                     params={"pages": ",".join(str(p) for p in pages)})
+        return [_make(PageText, p) for p in data["data"]]
+
+    def page_image(self, document: Document | str, page: int) -> bytes:
+        """The page as PNG bytes, no side past 1568 pixels."""
+        return self._client._request("GET", f"/documents/{_id(document)}/pages/{page}/image", raw=True)
+
     def delete(self, document: Document | str) -> None:
         """Delete a document and its pages; searches of it then fail."""
         self._client._request("DELETE", f"/documents/{_id(document)}")
@@ -457,7 +476,7 @@ class PageSearch:
     def search(self, questions: str | Sequence[str], *before_0_4: Any, document: Document | str | None = None,
                documents: Sequence[Document | str] | None = None, collection: Collection | str | None = None,
                filter: dict[str, Any] | None = None, max_documents: int | None = None,
-               document_top_k: int | None = None, top_k: int | None = None,
+               document_top_k: int | None = None, top_k: int | None = None, include_text: bool = False,
                idempotency_key: str | None = None) -> SearchResult:
         """Ask up to 10 questions. For each, the pages that help answer it, under the documents they are in.
 
@@ -467,7 +486,7 @@ class PageSearch:
 
         Across documents, the most relevant documents for each question are found first and only their pages
         searched: those likely to answer, at most max_documents (default 3), or exactly document_top_k. Without top_k, each document lists the pages likely to help,
-        possibly none; with it, exactly top_k. Retries send the same idempotency_key (a new one by default), so a
+        possibly none; with it, exactly top_k. include_text lists each page with its text. Retries send the same idempotency_key (a new one by default), so a
         search retried after a timeout is not run or charged twice; pass your own to make your own retries safe too.
         """
         if before_0_4 or isinstance(questions, Document):
@@ -487,8 +506,17 @@ class PageSearch:
             body["document_top_k"] = document_top_k
         if top_k is not None:
             body["top_k"] = top_k
+        if include_text:
+            body["include_text"] = True
         headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
         return SearchResult._from(self._request("POST", "/search", json=body, headers=headers))
+
+    def tools(self, *, collection: Collection | str | None = None, filter: dict[str, Any] | None = None) -> "Tools":
+        """search_documents and search_pages, for an LLM agent to call, over a collection, documents whose metadata
+        meets filter, or all of yours. Their descriptions hold the metadata schema, read now, so the agent can write
+        filters: pass tools.definitions (or tools.openai) to the model and tools.run(name, input) its tool calls."""
+        from ._tools import Tools
+        return Tools(self, collection=collection, filter=filter)
 
     # Account
 
@@ -500,7 +528,9 @@ class PageSearch:
 
     # Plumbing
 
-    def _request(self, method: str, path: str, headers: dict[str, str] | None = None, **kwargs: Any) -> dict[str, Any]:
+    def _request(self, method: str, path: str, headers: dict[str, str] | None = None, *, raw: bool = False,
+                 **kwargs: Any) -> Any:
+        """The response's JSON; its bytes, with raw, when it succeeds. An error raises PageSearchError."""
         headers = self._headers | (headers or {})  # the same on every attempt
         for attempt in range(self.max_retries + 1):
             try:
@@ -510,7 +540,7 @@ class PageSearch:
                     raise PageSearchError(f"Could not reach the API: {error}") from error
             else:
                 if response.status_code not in RETRY_STATUSES or attempt == self.max_retries:
-                    return _json(response)
+                    return response.content if raw and response.is_success else _json(response)
             time.sleep(0.5 * 2 ** attempt)
         raise AssertionError("unreachable")
 

@@ -210,3 +210,76 @@ def test_schema():
     assert s.keys[0].values == [{"value": "NVDA", "documents": 2}] and s.keys[2].values == []
     c.documents.schema(filter={"ticker": "NVDA"})
     assert sent[1].url.path == "/v1/documents/schema" and json.loads(sent[1].url.params["filter"]) == {"ticker": "NVDA"}
+
+
+def test_tools():
+    schema = {"object": "schema", "collection_id": "col_1", "documents": 3, "keys": [
+        {"key": "ticker", "types": ["string"], "documents": 3, "values": [{"value": "MMM", "documents": 2}]},
+        {"key": "year", "types": ["number"], "documents": 3, "min": 2018, "max": 2024, "values": []}]}
+    found = {"object": "document_search", "id": "dsrch_1", "results": [{"question": "q", "documents": [
+        {"document_id": "doc_1", "relevance": 0.9, "filename": "a.pdf", "pages": 10, "metadata": {"year": 2018}}]}],
+        "failed_documents": [], "processing_documents": []}
+    pages = {"object": "search", "id": "srch_1", "results": [{"question": "q", "documents": [
+        {"document_id": "doc_1", "filename": "a.pdf", "pages": [{"page": 4, "relevance": 1.0, "read": "image",
+                                                                  "text": "Chart"}]}]}],
+        "failed_documents": [], "processing_documents": []}
+    sent = []
+
+    def handler(request):
+        if request.url.path.endswith("/schema"):
+            return httpx.Response(200, json=schema)
+        sent.append((request.url.path, json.loads(request.content) if request.content else None))
+        if request.url.path.endswith("/image"):
+            return httpx.Response(200, content=b"\x89PNG...", headers={"content-type": "image/png"})
+        if request.url.path.endswith("/pages"):
+            if request.url.params["pages"] == "99":
+                return httpx.Response(422, json={"error": {"code": "invalid_request", "message": "There is no page 99."}})
+            return httpx.Response(200, json={"object": "list", "document_id": "doc_1", "data": [
+                {"object": "page", "page": int(p), "read": "image" if p == "7" else "text", "text": f"text {p}"}
+                for p in request.url.params["pages"].split(",")]})
+        if request.url.path.endswith("/documents/search"):
+            if "bad" in sent[-1][1].get("filter", {}).get("$and", [{}, {}])[1]:
+                return httpx.Response(422, json={"error": {"code": "invalid_filter", "message": "No such condition."}})
+            return httpx.Response(200, json=found)
+        return httpx.Response(200, json=pages)
+
+    tools = client(handler).tools(collection="col_1", filter={"audited": True})
+    tools.run_text = lambda name, input: tools.run(name, input).text
+    first = tools.definitions[0]["description"]
+    assert '- ticker: string, on 3 documents; values: "MMM" (2), and others' in first
+    assert "- year: number, on 3 documents; 2018 to 2024" in first
+    assert [t["function"]["name"] for t in tools.openai] == ["search_documents", "search_pages", "read_pages",
+                                                              "view_pages"]
+
+    out = json.loads(tools.run_text("search_documents", {"question": "q", "filter": {"year": 2018}}))
+    assert out["documents"][0]["document_id"] == "doc_1"
+    assert sent[-1] == ("/v1/documents/search", {"questions": ["q"], "collection_id": "col_1",
+                                                 "filter": {"$and": [{"audited": True}, {"year": 2018}]}})
+    assert json.loads(tools.run_text("search_documents", {"question": "q", "filter": {"bad": 1}})) == \
+        {"error": "No such condition."}
+
+    out = json.loads(tools.run_text("search_pages", {"question": "q", "document_ids": ["doc_1", "doc_2"]}))
+    assert out == {"documents": [{"document_id": "doc_1", "filename": "a.pdf",
+                                  "pages": [{"page": 4, "relevance": 1.0, "read": "image", "text": "Chart"}]}]}
+    assert sent[-1] == ("/v1/search", {"questions": ["q"], "document_ids": ["doc_1", "doc_2"], "document_top_k": 2,
+                                       "include_text": True})
+    tools.run("search_pages", {"question": "q", "document_ids": ["doc_1"], "top_k": "auto"})
+    assert sent[-1][1] == {"questions": ["q"], "document_id": "doc_1", "include_text": True}
+    tools.run("search_pages", {"question": "q", "document_ids": ["doc_1"], "top_k": 3})
+    assert sent[-1][1]["top_k"] == 3
+    assert "error" in json.loads(tools.run_text("search_pages", {"question": "q", "document_ids": []}))
+    assert "error" in json.loads(tools.run_text("search_pages", {"question": "q"}))
+
+    out = tools.run("read_pages", {"document_id": "doc_1", "pages": [4, 7, 4]})
+    assert json.loads(out.text)["pages"] == [{"page": 4, "read": "text", "text": "text 4"},
+                                             {"page": 7, "read": "image", "text": "text 7",
+                                              "note": "Its text may be incomplete: see its picture."}]
+    assert [i.page for i in out.images] == [7] and out.images[0].png == b"\x89PNG..."
+    content = out.anthropic()
+    assert content[1] == {"type": "text", "text": "Page 7 of doc_1:"} and content[2]["source"]["media_type"] == "image/png"
+    out = tools.run("view_pages", {"document_id": "doc_1", "pages": [4, 9]})
+    assert [p["page"] for p in json.loads(out.text)["pages"]] == [4, 9] and [i.page for i in out.images] == [4, 9]
+    assert "error" in json.loads(tools.run_text("view_pages", {"document_id": "doc_1", "pages": [1, 2, 3, 4, 5, 6]}))
+    assert tools.run("search_documents", {"question": "q"}).anthropic().startswith('{"documents"')
+    assert json.loads(tools.run_text("read_pages", {"document_id": "doc_1", "pages": [99]})) == {"error": "There is no page 99."}
+    assert "error" in json.loads(tools.run_text("read_pages", {"document_id": "doc_1"}))

@@ -73,16 +73,44 @@ result = client.search("Who is the CEO?", filter={"ticker": {"$in": ["MMM", "AAP
 
 Filters take `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$and` and `$or`.
 
+Read pages: their text, or a page as a picture. Each page a search lists says how it is best read (`page.read`:
+`"text"`, or `"image"` for a scan or a chart, whose text may be incomplete); `include_text=True` lists it with its
+text.
+
+```python
+texts = client.documents.pages(doc, [38, 39])   # each with .text and .read
+png = client.documents.page_image(doc, 38)       # PNG bytes
+```
+
+## Agents
+
+`client.tools()` gives an LLM agent four tools over your documents: `search_documents` (with your metadata's keys
+and values in its description, so the agent can write filters), `search_pages` (with each page's text),
+`read_pages` (text, with a picture of any page that is one) and `view_pages` (pages as pictures).
+
+```python
+tools = client.tools(collection=reports)  # or filter=..., or neither for all your documents
+
+response = anthropic.messages.create(model=..., tools=tools.definitions, messages=messages)
+for block in response.content:
+    if block.type == "tool_use":
+        content = tools.run(block.name, block.input).anthropic()  # the tool_result content
+```
+
+For OpenAI, pass `tools.openai`; `tools.run()` gives `.text` and `.images`, each image with `.data_url`.
+
 ## Reference
 
 | | |
 | --- | --- |
 | `PageSearch(api_key=None, base_url=None, timeout=120, max_retries=2)` | The key defaults to `PAGEINDEX_SEARCH_API_KEY`. |
 | `documents.upload(file, collection=None, metadata=None, wait=True)` | A path, bytes or an open file. Returns a `Document`, ready to search unless `wait=False`. |
-| `search(questions, document=None, documents=None, collection=None, filter=None, max_documents=None, document_top_k=None, top_k=None, idempotency_key=None)` | Up to 10 questions. For each, the pages that help, under the documents they are in: of one document, or across documents (those named, a collection's, those meeting `filter`, or all), whose most relevant are opened: those likely to answer, at most `max_documents` (default 3), or exactly `document_top_k`. Each document lists the pages likely to help, or exactly `top_k`. A search retried after a timeout is not charged twice. |
+| `search(questions, document=None, documents=None, collection=None, filter=None, max_documents=None, document_top_k=None, top_k=None, include_text=False, idempotency_key=None)` | Up to 10 questions. For each, the pages that help, under the documents they are in: of one document, or across documents (those named, a collection's, those meeting `filter`, or all), whose most relevant are opened: those likely to answer, at most `max_documents` (default 3), or exactly `document_top_k`. Each document lists the pages likely to help, or exactly `top_k`, each with how it is best read, and with `include_text`, its text. A search retried after a timeout is not charged twice. |
 | `documents.search(questions, document_ids=None, collection=None, filter=None, top_k=None, idempotency_key=None)` | Up to 10 questions of your documents (all of them, up to 1,000, those named, or a collection's). Each answer lists the documents likely to hold it, or exactly `top_k`. Each document is priced as a page. |
 | `documents.list(limit=20, after=None, collection=None, filter=None)` | Your documents, newest first, or a collection's, or those whose metadata meets `filter`. Loop over it for every document; `.data` and `.has_more` are one page. |
 | `documents.get(id)`, `documents.delete(document)` | One document; delete one. |
+| `documents.pages(document, pages)`, `documents.page_image(document, page)` | The text of up to 20 pages, each with how it is best read; a page as PNG bytes. |
+| `tools(collection=None, filter=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, and `.run(name, input)`. |
 | `documents.update(document, metadata=)` | Set metadata keys; `None` removes one. |
 | `collections.schema(collection)`, `documents.schema(collection=None, filter=None)` | The metadata keys the documents have: each key's types, how many documents have it, its least and greatest numbers and commonest strings. Counted as they are now; nothing is enforced. |
 | `collections.create(name)`, `.list()`, `.get(id)`, `.rename(collection, name)`, `.delete(collection)` | Named groups of your documents. Deleting one leaves its documents. |
