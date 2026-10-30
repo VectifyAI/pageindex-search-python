@@ -89,6 +89,8 @@ class FoundDocument:
     metadata: dict[str, Any] = field(default_factory=dict)
     relevance: float | None = None  # how likely it holds the answer; None when the search named it (document=)
     failed_pages: list[int] = field(default_factory=list)  # pages that could not be read; not charged
+    # Without top_k: the next most relevant pages after those listed, without text, to read if those do not answer.
+    more_pages: list[Page] = field(default_factory=list)
 
 
 @dataclass
@@ -131,6 +133,7 @@ class SearchResult:
 def _found(data: dict[str, Any]) -> FoundDocument:
     out = _make(FoundDocument, data)
     out.pages = [_make(Page, p) for p in data["pages"]]
+    out.more_pages = [_make(Page, p) for p in data.get("more_pages", [])]
     return out
 
 

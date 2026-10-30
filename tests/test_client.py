@@ -221,7 +221,8 @@ def test_tools():
         "failed_documents": [], "processing_documents": []}
     pages = {"object": "search", "id": "srch_1", "results": [{"question": "q", "documents": [
         {"document_id": "doc_1", "filename": "a.pdf", "pages": [{"page": 4, "relevance": 1.0, "read": "image",
-                                                                  "text": "Chart"}]}]}],
+                                                                  "text": "Chart"}],
+         "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}]}],
         "failed_documents": [], "processing_documents": []}
     sent = []
 
@@ -251,23 +252,21 @@ def test_tools():
     assert [t["function"]["name"] for t in tools.openai] == ["search_documents", "search_pages", "read_pages",
                                                               "view_pages"]
 
-    out = json.loads(tools.run_text("search_documents", {"question": "q", "filter": {"year": 2018}}))
-    assert out["documents"][0]["document_id"] == "doc_1"
+    out = json.loads(tools.run_text("search_documents", {"questions": ["q"], "filter": {"year": 2018}}))
+    assert out["results"][0]["documents"][0]["document_id"] == "doc_1"
     assert sent[-1] == ("/v1/documents/search", {"questions": ["q"], "collection_id": "col_1",
                                                  "filter": {"$and": [{"audited": True}, {"year": 2018}]}})
     assert json.loads(tools.run_text("search_documents", {"question": "q", "filter": {"bad": 1}})) == \
         {"error": "No such condition."}
 
-    out = json.loads(tools.run_text("search_pages", {"question": "q", "document_ids": ["doc_1", "doc_2"]}))
-    assert out == {"documents": [{"document_id": "doc_1", "filename": "a.pdf",
-                                  "pages": [{"page": 4, "relevance": 1.0, "read": "image", "text": "Chart"}]}]}
-    assert sent[-1] == ("/v1/search", {"questions": ["q"], "document_ids": ["doc_1", "doc_2"], "document_top_k": 2,
-                                       "include_text": True})
-    tools.run("search_pages", {"question": "q", "document_ids": ["doc_1"], "top_k": "auto"})
-    assert sent[-1][1] == {"questions": ["q"], "document_id": "doc_1", "include_text": True}
-    tools.run("search_pages", {"question": "q", "document_ids": ["doc_1"], "top_k": 3})
+    out = json.loads(tools.run_text("search_pages", {"question": "q", "document_id": "doc_1", "top_k": "auto"}))
+    assert out == {"document_id": "doc_1", "filename": "a.pdf", "results": [{"question": "q",
+                   "pages": [{"page": 4, "relevance": 1.0, "read": "image", "text": "Chart"}],
+                   "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}]}
+    assert sent[-1] == ("/v1/search", {"questions": ["q"], "document_id": "doc_1", "include_text": True})
+    tools.run("search_pages", {"question": "q", "document_id": "doc_1", "top_k": 3})
     assert sent[-1][1]["top_k"] == 3
-    assert "error" in json.loads(tools.run_text("search_pages", {"question": "q", "document_ids": []}))
+    assert "error" in json.loads(tools.run_text("search_pages", {"question": "q", "document_ids": ["doc_1"]}))
     assert "error" in json.loads(tools.run_text("search_pages", {"question": "q"}))
 
     out = tools.run("read_pages", {"document_id": "doc_1", "pages": [4, 7, 4]})
@@ -280,7 +279,7 @@ def test_tools():
     out = tools.run("view_pages", {"document_id": "doc_1", "pages": [4, 9]})
     assert [p["page"] for p in json.loads(out.text)["pages"]] == [4, 9] and [i.page for i in out.images] == [4, 9]
     assert "error" in json.loads(tools.run_text("view_pages", {"document_id": "doc_1", "pages": [1, 2, 3, 4, 5, 6]}))
-    assert tools.run("search_documents", {"question": "q"}).anthropic().startswith('{"documents"')
+    assert tools.run("search_documents", {"question": "q"}).anthropic().startswith('{"results"')
     assert json.loads(tools.run_text("read_pages", {"document_id": "doc_1", "pages": [99]})) == {"error": "There is no page 99."}
     assert "error" in json.loads(tools.run_text("read_pages", {"document_id": "doc_1"}))
 
@@ -304,3 +303,22 @@ def test_openai_agents_tools():
     out = asyncio.run(tools[2].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
     assert isinstance(out[0], agents.ToolOutputText) and out[1].text == "Page 7 of doc_1:"
     assert out[2].image_url.startswith("data:image/png;base64,")
+
+
+def test_tools_ask_several_questions_at_once():
+    schema = {"object": "schema", "collection_id": None, "documents": 1, "keys": []}
+    sent = []
+
+    def handler(request):
+        if request.url.path.endswith("/schema"):
+            return httpx.Response(200, json=schema)
+        body = json.loads(request.content); sent.append(body)
+        return httpx.Response(200, json={"object": "search", "id": "srch_1", "results": [
+            {"question": q, "documents": [{"document_id": "doc_1", "filename": "a.pdf",
+                                           "pages": [{"page": k + 1, "relevance": 1.0, "read": "text", "text": q}]}]}
+            for k, q in enumerate(body["questions"])], "failed_documents": [], "processing_documents": []})
+
+    tools = client(handler).tools()
+    out = json.loads(tools.run("search_pages", {"questions": ["revenue", "CEO"], "document_id": "doc_1"}).text)
+    assert sent[-1]["questions"] == ["revenue", "CEO"]
+    assert [(r["question"], r["pages"][0]["page"]) for r in out["results"]] == [("revenue", 1), ("CEO", 2)]

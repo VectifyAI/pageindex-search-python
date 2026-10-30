@@ -18,9 +18,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ._client import Collection, PageSearch, Schema
 
-MAX_PAGE_DOCUMENTS = 10  # documents one search_pages call may open
 MAX_PAGES_READ = 20  # pages one read_pages call may read
 MAX_IMAGES = 5  # pictures one read_pages call may give: each is some thousands of tokens
+MAX_QUESTIONS = 10  # questions one search may ask
+
+QUESTIONS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_QUESTIONS,
+             "description": "The questions, as a person would ask them: several at once cost much less than one "
+                            "at a time, so ask together the questions you have of the same documents."}
 
 FILTERS = ('Conditions: {"key": value} equals; {"key": {"$ne"|"$in"|"$nin"|"$gt"|"$gte"|"$lt"|"$lte": ...}}; '
            '{"$and": [...]} and {"$or": [...]} combine filters. Values match exactly, type included: "2018" is not '
@@ -48,6 +52,11 @@ def _top_k(what: str) -> dict[str, Any]:
     return {"anyOf": [{"type": "string", "enum": ["auto"]}, {"type": "integer", "minimum": 1, "maximum": 50}],
             "description": f"\"auto\" (the default, and usually best): the {what} likely to help. A number: exactly "
                            "that many, most relevant first, only when auto did not find enough."}
+
+
+def _asked(questions: list[str] | str) -> list[str]:
+    """The questions; one given alone, as models sometimes do, is a list of one."""
+    return [questions] if isinstance(questions, str) else list(questions)
 
 
 def _auto(top_k: int | str | None) -> int | None:
@@ -146,20 +155,22 @@ class Tools:
         return {
             "name": "search_documents",
             "description": (
-                f"Find which of {self.schema.documents} documents likely answer a question, most relevant first, "
+                f"Find which of {self.schema.documents} documents likely answer each question, most relevant first, "
                 "with each one's relevance (0 to 1), page count and metadata. Narrow them with a metadata filter "
                 "when the question names something the metadata holds, such as a company or a year. Then call "
-                "search_pages with the documents worth reading. Use top_k \"auto\": it returns the documents likely "
+                "search_pages with the documents worth reading. Searching a document's pages is priced by its pages, so "
+                "search the most relevant documents first, and others only when the question needs them or those did "
+                "not answer. Use top_k \"auto\": it returns the documents likely "
                 "to help, which is best.\n\n" + describe(self.schema) + "\n\n" + FILTERS
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string", "description": "The question, as a person would ask it."},
+                    "questions": QUESTIONS,
                     "filter": {"type": "object", "description": "Only documents whose metadata meets this."},
                     "top_k": _top_k("documents"),
                 },
-                "required": ["question"],
+                "required": ["questions"],
             },
         }
 
@@ -167,23 +178,25 @@ class Tools:
         return {
             "name": "search_pages",
             "description": (
-                "Find the pages that help answer a question, in documents search_documents found, most relevant "
-                "first, each with its relevance (0 to 1) and text. Pages are numbered from 1. A page whose read is "
+                "Find the pages of one document that help answer each question, most relevant first, each with its "
+                "relevance (0 to 1) and text. Pages are numbered from 1. It is priced by the document's "
+                "pages: search the documents search_documents ranks most relevant first, calling it for each at the "
+                "same time, and others only when needed; to ask again in other words, ask only "
+                "of the documents still missing the answer. A page whose read is "
                 "\"image\" is a picture, such as a scan or a chart: its text may be incomplete or empty, so look at "
                 "it with read_pages. Use top_k \"auto\": it returns the pages "
                 "likely to help, which is best, and a number brings back many pages of text. The most relevant pages "
-                "usually hold the answer: once they do, stop searching."
+                "usually hold the answer: once they do, stop searching. If they do not, more_pages lists the next "
+                "most relevant: read those with read_pages, which is free, before searching again."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string", "description": "The question, as a person would ask it."},
-                    "document_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1,
-                                     "maxItems": MAX_PAGE_DOCUMENTS,
-                                     "description": "The documents to search, from search_documents."},
-                    "top_k": _top_k("pages for each document"),
+                    "questions": QUESTIONS,
+                    "document_id": {"type": "string", "description": "The document to search, from search_documents."},
+                    "top_k": _top_k("pages"),
                 },
-                "required": ["question", "document_ids"],
+                "required": ["questions", "document_id"],
             },
         }
 
@@ -230,6 +243,9 @@ class Tools:
         """Call a tool the agent asked for; what to send back as its result. An error comes back as
         {"error": ...}, for the agent to correct."""
         from ._client import PageSearchError
+        if "question" in input and "questions" not in input:  # one question, as a model may send it
+            input = {**input, "questions": input["question"]}
+            del input["question"]
         try:
             if name == "search_documents":
                 return ToolResult(_text(self.search_documents(**input)))
@@ -246,27 +262,28 @@ class Tools:
             out = {"error": f"Bad input for {name}: {error}"}
         return ToolResult(_text(out))
 
-    def search_documents(self, question: str, filter: dict[str, Any] | None = None,
+    def search_documents(self, questions: list[str] | str, filter: dict[str, Any] | None = None,
                          top_k: int | str | None = None) -> dict[str, Any]:
         scope = self._filter if filter is None else filter if self._filter is None else {"$and": [self._filter, filter]}
-        found = self._client.documents.search(question, collection=self._collection, filter=scope, top_k=_auto(top_k))
-        return {"documents": [{"document_id": d.document_id, "filename": d.filename, "pages": d.pages,
-                               "relevance": d.relevance, "metadata": d.metadata}
-                              for d in found.results[0].documents]}
+        found = self._client.documents.search(_asked(questions), collection=self._collection, filter=scope,
+                                              top_k=_auto(top_k))
+        return {"results": [{"question": a.question,
+                             "documents": [{"document_id": d.document_id, "filename": d.filename, "pages": d.pages,
+                                            "relevance": d.relevance, "metadata": d.metadata} for d in a.documents]}
+                            for a in found.results]}
 
-    def search_pages(self, question: str, document_ids: list[str], top_k: int | str | None = None) -> dict[str, Any]:
-        named = list(dict.fromkeys(document_ids))
-        if not 1 <= len(named) <= MAX_PAGE_DOCUMENTS:
-            return {"error": f"Name 1 to {MAX_PAGE_DOCUMENTS} documents."}
-        if len(named) == 1:
-            result = self._client.search(question, document=named[0], top_k=_auto(top_k), include_text=True)
-        else:
-            result = self._client.search(question, documents=named, document_top_k=len(named), top_k=_auto(top_k),
-                                         include_text=True)
-        return {"documents": [{"document_id": d.document_id, "filename": d.filename,
-                               "pages": [{"page": p.page, "relevance": p.relevance, "read": p.read, "text": p.text}
-                                         for p in d.pages]}
-                              for d in result.results[0].documents]}
+    def search_pages(self, questions: list[str] | str, document_id: str, top_k: int | str | None = None) -> dict[str, Any]:
+        found = self._client.search(_asked(questions), document=document_id, top_k=_auto(top_k), include_text=True)
+        first = found.results[0].documents[0]
+        results = []
+        for a in found.results:
+            d = a.documents[0]
+            out: dict[str, Any] = {"question": a.question, "pages": [
+                {"page": p.page, "relevance": p.relevance, "read": p.read, "text": p.text} for p in d.pages]}
+            if d.more_pages:
+                out["more_pages"] = [{"page": p.page, "relevance": p.relevance, "read": p.read} for p in d.more_pages]
+            results.append(out)
+        return {"document_id": first.document_id, "filename": first.filename, "results": results}
 
     def read_pages(self, document_id: str, pages: list[int]) -> ToolResult:
         return self._pages(document_id, pages, MAX_PAGES_READ, lambda p: p.read == "image")
