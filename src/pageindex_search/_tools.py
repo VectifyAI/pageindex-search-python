@@ -1,5 +1,5 @@
 """Tools an LLM agent can call: find which documents answer, search the pages of the ones it picks (with their
-text), and read pages, with pictures of those best seen.
+text), read pages, with pictures of those best seen, and zoom in on a part of a page too small to read.
 
     tools = client.tools(collection=filings)
     response = anthropic.messages.create(..., tools=tools.definitions)
@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 MAX_PAGES_READ = 20  # pages one read_pages call may read
 MAX_IMAGES = 5  # pictures one read_pages call may give: each is some thousands of tokens
 MAX_QUESTIONS = 10  # questions one search may ask
+REGION = {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 4, "maxItems": 4,
+          "description": "[top, left, bottom, right] as fractions of the page's height and width, from 0 to 1: "
+                         "[0.3, 0, 0.6, 1] is the band from 30% to 60% of the way down, full width."}
 
 QUESTIONS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_QUESTIONS,
              "description": "The questions, as a person would ask them: several at once cost much less than one "
@@ -69,10 +72,17 @@ def _number(n: float | None) -> str:
 
 @dataclass
 class PageImage:
-    """A page as PNG bytes."""
+    """A page as PNG bytes, or, with region, part of it."""
     document_id: str
     page: int
     png: bytes
+    region: list[float] | None = None
+
+    @property
+    def label(self) -> str:
+        """What the picture is, to put before it: "Page 7 of doc_...:"."""
+        part = f", region {self.region}" if self.region is not None else ""
+        return f"Page {self.page} of {self.document_id}{part}:"
 
     @property
     def base64(self) -> str:
@@ -96,15 +106,15 @@ class ToolResult:
             return self.text
         content: list[dict[str, Any]] = [{"type": "text", "text": self.text}]
         for image in self.images:
-            content.append({"type": "text", "text": f"Page {image.page} of {image.document_id}:"})
+            content.append({"type": "text", "text": image.label})
             content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                                         "data": image.base64}})
         return content
 
 
 class Tools:
-    """search_documents, search_pages, read_pages and view_pages over a scope: a collection, documents whose metadata meets a
-    filter, or all of yours. The metadata schema is read once, when made; make new ones when the documents change."""
+    """search_documents, search_pages, read_pages, view_pages and zoom_page over a scope: a collection, documents whose
+    metadata meets a filter, or all of yours. The metadata schema is read once, when made; make new ones when the documents change."""
 
     def __init__(self, client: PageSearch, *, collection: Collection | str | None = None,
                  filter: dict[str, Any] | None = None):
@@ -116,7 +126,8 @@ class Tools:
             self.schema = client.collections.schema(self._collection)
         else:
             self.schema = client.documents.schema(collection=self._collection, filter=filter)
-        self.definitions = [self._search_documents(), self._search_pages(), self._read_pages(), self._view_pages()]
+        self.definitions = [self._search_documents(), self._search_pages(), self._read_pages(), self._view_pages(),
+                            self._zoom_page()]
 
     @property
     def openai(self) -> list[dict[str, Any]]:
@@ -141,8 +152,7 @@ class Tools:
                     return out.text
                 parts: list[Any] = [ToolOutputText(text=out.text)]
                 for image in out.images:
-                    parts += [ToolOutputText(text=f"Page {image.page} of {image.document_id}:"),
-                              ToolOutputImage(image_url=image.data_url)]
+                    parts += [ToolOutputText(text=image.label), ToolOutputImage(image_url=image.data_url)]
                 return parts
             # filter is any object, which a strict schema cannot hold.
             return FunctionTool(name=definition["name"], description=definition["description"],
@@ -208,7 +218,8 @@ class Tools:
                 "\"image\" (a scan or a chart, whose text may be incomplete). Use it for pages search_pages found "
                 "that are pictures, or for the pages around one, such as where a table goes on. At most "
                 f"{MAX_PAGES_READ} pages at a time, and at most {MAX_IMAGES} of them pictures: in a scanned document "
-                f"every page is a picture, so read {MAX_IMAGES} at a time."
+                f"every page is a picture, so read {MAX_IMAGES} at a time. If a picture's small print or figures are hard "
+                "to read, zoom in with zoom_page."
             ),
             "input_schema": {
                 "type": "object",
@@ -226,7 +237,8 @@ class Tools:
             "name": "view_pages",
             "description": (
                 f"See pages of a document as pictures, with their text: up to {MAX_IMAGES} at a time, numbered from "
-                "1. Use it where how a page looks matters, such as a table's layout or a chart on a page of text."
+                "1. Use it where how a page looks matters, such as a table's layout or a chart on a page of text. If "
+                "small print or figures are hard to read, zoom in with zoom_page before answering."
             ),
             "input_schema": {
                 "type": "object",
@@ -236,6 +248,25 @@ class Tools:
                               "maxItems": MAX_IMAGES},
                 },
                 "required": ["document_id", "pages"],
+            },
+        }
+
+    def _zoom_page(self) -> dict[str, Any]:
+        return {
+            "name": "zoom_page",
+            "description": (
+                "See part of a page, sharper: for small print, a dense table's figures or a footnote that are hard to "
+                "read in a picture from read_pages or view_pages. Look at the whole page first, then zoom on the part "
+                "you need, a band no taller than about a third of the page. Free, as reading pages is."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "page": {"type": "integer", "minimum": 1},
+                    "region": REGION,
+                },
+                "required": ["document_id", "page", "region"],
             },
         }
 
@@ -255,10 +286,12 @@ class Tools:
                 return self.read_pages(**input)
             if name == "view_pages":
                 return self.view_pages(**input)
+            if name == "zoom_page":
+                return self.zoom_page(**input)
             out = {"error": f"No tool {name}."}
         except PageSearchError as error:
             out = {"error": error.message}
-        except TypeError as error:
+        except (TypeError, ValueError) as error:
             out = {"error": f"Bad input for {name}: {error}"}
         return ToolResult(_text(out))
 
@@ -290,6 +323,12 @@ class Tools:
 
     def view_pages(self, document_id: str, pages: list[int]) -> ToolResult:
         return self._pages(document_id, pages, MAX_IMAGES, lambda p: True)
+
+    def zoom_page(self, document_id: str, page: int, region: list[float]) -> ToolResult:
+        box = [float(v) for v in region]
+        png = self._client.documents.page_image(document_id, page, region=box)
+        return ToolResult(_text({"document_id": document_id, "page": page, "region": box}),
+                          [PageImage(document_id, page, png, box)])
 
     def _pages(self, document_id: str, pages: list[int], most: int, pictured_if) -> ToolResult:
         """The pages' text, and pictures of those pictured_if picks."""

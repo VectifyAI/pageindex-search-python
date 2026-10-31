@@ -156,7 +156,7 @@ class DocumentAnswer:
 class DocumentSearchUsage:
     documents: int
     questions: int
-    billable_documents: int  # each priced as a page
+    billable_documents: int  # each at the document search price
     cost_usd: float
     balance_usd: float
 
@@ -343,9 +343,11 @@ class Documents:
                                      params={"pages": ",".join(str(p) for p in pages)})
         return [_make(PageText, p) for p in data["data"]]
 
-    def page_image(self, document: Document | str, page: int) -> bytes:
-        """The page as PNG bytes, no side past 1568 pixels."""
-        return self._client._request("GET", f"/documents/{_id(document)}/pages/{page}/image", raw=True)
+    def page_image(self, document: Document | str, page: int, region: Sequence[float] | None = None) -> bytes:
+        """The page as PNG bytes, no side past 1568 pixels. With region, (top, left, bottom, right) as fractions of
+        the page's height and width, only that part of it, drawn sharper: to read small print."""
+        params = {"region": ",".join(str(v) for v in region)} if region is not None else None
+        return self._client._request("GET", f"/documents/{_id(document)}/pages/{page}/image", raw=True, params=params)
 
     def delete(self, document: Document | str) -> None:
         """Delete a document and its pages; searches of it then fail."""
@@ -360,7 +362,7 @@ class Documents:
         Every document of yours (up to 1,000), only those in document_ids, or only those in a collection and those
         whose metadata meets filter. Without
         top_k, each answer lists the documents likely to help, possibly none; with it, exactly top_k. Each document
-        is priced as a page. Retries send the same idempotency_key, as client.search() does.
+        is priced at the document search price. Retries send the same idempotency_key, as client.search() does.
         """
         body: dict[str, Any] = {"questions": [questions] if isinstance(questions, str) else list(questions)}
         if document_ids is not None:
@@ -515,8 +517,8 @@ class PageSearch:
         return SearchResult._from(self._request("POST", "/search", json=body, headers=headers))
 
     def tools(self, *, collection: Collection | str | None = None, filter: dict[str, Any] | None = None) -> "Tools":
-        """search_documents and search_pages, for an LLM agent to call, over a collection, documents whose metadata
-        meets filter, or all of yours. Their descriptions hold the metadata schema, read now, so the agent can write
+        """search_documents, search_pages, read_pages, view_pages and zoom_page, for an LLM agent to call, over a
+        collection, documents whose metadata meets filter, or all of yours. Their descriptions hold the metadata schema, read now, so the agent can write
         filters: pass tools.definitions (or tools.openai) to the model and tools.run(name, input) its tool calls."""
         from ._tools import Tools
         return Tools(self, collection=collection, filter=filter)

@@ -225,12 +225,14 @@ def test_tools():
          "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}]}],
         "failed_documents": [], "processing_documents": []}
     sent = []
+    images = []  # each picture asked for: its region, or None
 
     def handler(request):
         if request.url.path.endswith("/schema"):
             return httpx.Response(200, json=schema)
         sent.append((request.url.path, json.loads(request.content) if request.content else None))
         if request.url.path.endswith("/image"):
+            images.append(request.url.params.get("region"))
             return httpx.Response(200, content=b"\x89PNG...", headers={"content-type": "image/png"})
         if request.url.path.endswith("/pages"):
             if request.url.params["pages"] == "99":
@@ -250,7 +252,7 @@ def test_tools():
     assert '- ticker: string, on 3 documents; values: "MMM" (2), and others' in first
     assert "- year: number, on 3 documents; 2018 to 2024" in first
     assert [t["function"]["name"] for t in tools.openai] == ["search_documents", "search_pages", "read_pages",
-                                                              "view_pages"]
+                                                              "view_pages", "zoom_page"]
 
     out = json.loads(tools.run_text("search_documents", {"questions": ["q"], "filter": {"year": 2018}}))
     assert out["results"][0]["documents"][0]["document_id"] == "doc_1"
@@ -279,6 +281,11 @@ def test_tools():
     out = tools.run("view_pages", {"document_id": "doc_1", "pages": [4, 9]})
     assert [p["page"] for p in json.loads(out.text)["pages"]] == [4, 9] and [i.page for i in out.images] == [4, 9]
     assert "error" in json.loads(tools.run_text("view_pages", {"document_id": "doc_1", "pages": [1, 2, 3, 4, 5, 6]}))
+    out = tools.run("zoom_page", {"document_id": "doc_1", "page": 4, "region": [0.3, 0, 0.6, 1]})
+    assert json.loads(out.text) == {"document_id": "doc_1", "page": 4, "region": [0.3, 0.0, 0.6, 1.0]}
+    assert images[-1] == "0.3,0.0,0.6,1.0" and out.images[0].png == b"\x89PNG..."
+    assert out.anthropic()[1] == {"type": "text", "text": "Page 4 of doc_1, region [0.3, 0.0, 0.6, 1.0]:"}
+    assert "error" in json.loads(tools.run_text("zoom_page", {"document_id": "doc_1", "page": 4, "region": ["x", 0, 1, 1]}))
     assert tools.run("search_documents", {"question": "q"}).anthropic().startswith('{"results"')
     assert json.loads(tools.run_text("read_pages", {"document_id": "doc_1", "pages": [99]})) == {"error": "There is no page 99."}
     assert "error" in json.loads(tools.run_text("read_pages", {"document_id": "doc_1"}))
@@ -298,7 +305,7 @@ def test_openai_agents_tools():
 
     import asyncio
     tools = client(handler).tools().openai_agents()
-    assert [t.name for t in tools] == ["search_documents", "search_pages", "read_pages", "view_pages"]
+    assert [t.name for t in tools] == ["search_documents", "search_pages", "read_pages", "view_pages", "zoom_page"]
     assert all(isinstance(t, agents.FunctionTool) and not t.strict_json_schema for t in tools)
     out = asyncio.run(tools[2].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
     assert isinstance(out[0], agents.ToolOutputText) and out[1].text == "Page 7 of doc_1:"
