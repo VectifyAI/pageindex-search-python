@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from pageindex_search import PageSearch, PageSearchError
+from pageindex_search._tools import PICTURED, SEE_PICTURE
 
 
 def client(handler) -> PageSearch:
@@ -285,7 +286,7 @@ def test_tools():
 
     out = json.loads(tools.run_text("search_pages", {"question": "q", "document_id": "doc_1", "top_k": "auto"}))
     assert out == {"document_id": "doc_1", "filename": "a.pdf", "results": [{"question": "q",
-                   "pages": [{"page": 4, "relevance": 1.0, "read": "image", "text": "Chart"}],
+                   "pages": [{"page": 4, "relevance": 1.0, "read": "image", "text": "Chart", "note": PICTURED}],
                    "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}]}
     assert sent[-1] == ("/v1/search", {"questions": ["q"], "document_id": "doc_1", "include_text": True})
     tools.run("search_pages", {"question": "q", "document_id": "doc_1", "top_k": 3})
@@ -296,7 +297,7 @@ def test_tools():
     out = tools.run("read_pages", {"document_id": "doc_1", "pages": [4, 7, 4]})
     assert json.loads(out.text)["pages"] == [{"page": 4, "read": "text", "text": "text 4"},
                                              {"page": 7, "read": "image", "text": "text 7",
-                                              "note": "Its text may be incomplete: see its picture."}]
+                                              "note": SEE_PICTURE}]
     assert [i.page for i in out.images] == [7] and out.images[0].png == b"\x89PNG..."
     content = out.anthropic()
     assert content[1] == {"type": "text", "text": "Page 7 of doc_1:"} and content[2]["source"]["media_type"] == "image/png"
@@ -334,7 +335,7 @@ def test_openai_agents_tools():
     assert all(isinstance(t, agents.FunctionTool) and not t.strict_json_schema for t in tools)
     out = asyncio.run(tools[3].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
     assert isinstance(out[0], agents.ToolOutputText) and out[1].text == "Page 7 of doc_1:"
-    assert out[2].image_url.startswith("data:image/png;base64,")
+    assert out[2].image_url.startswith("data:image/png;base64,") and out[2].detail == "high"
 
 
 def test_tools_ask_several_questions_at_once():

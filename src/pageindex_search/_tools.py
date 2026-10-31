@@ -30,6 +30,11 @@ BOX = {"type": "object", "properties": {k: {"type": "number", "minimum": 0, "max
                       '{"x0": 0, "y0": 0.3, "x1": 1, "y1": 0.6} is the band from 30% to 60% of the way down, full '
                       "width."}
 
+# The notes on a page whose read is "image", in search_pages and in read_pages.
+PICTURED = "A picture: its text may be incomplete or wrong. See it with read_pages before answering from it."
+SEE_PICTURE = ("A picture: its text may be incomplete or wrong. Read what you need from the picture, zooming in "
+               "with zoom_page where the print is small.")
+
 QUESTIONS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_QUESTIONS,
              "description": "The questions, as a person would ask them: several at once cost much less than one "
                             "at a time, so ask together the questions you have of the same documents."}
@@ -157,7 +162,7 @@ class Tools:
                     return out.text
                 parts: list[Any] = [ToolOutputText(text=out.text)]
                 for image in out.images:
-                    parts += [ToolOutputText(text=image.label), ToolOutputImage(image_url=image.data_url)]
+                    parts += [ToolOutputText(text=image.label), ToolOutputImage(image_url=image.data_url, detail="high")]
                 return parts
             # filter is any object, which a strict schema cannot hold.
             return FunctionTool(name=definition["name"], description=definition["description"],
@@ -363,7 +368,8 @@ class Tools:
         for a in found.results:
             d = a.documents[0]
             out: dict[str, Any] = {"question": a.question, "pages": [
-                {"page": p.page, "relevance": p.relevance, "read": p.read, "text": p.text} for p in d.pages]}
+                {"page": p.page, "relevance": p.relevance, "read": p.read, "text": p.text,
+                 **({"note": PICTURED} if p.read == "image" else {})} for p in d.pages]}
             if d.more_pages:
                 out["more_pages"] = [{"page": p.page, "relevance": p.relevance, "read": p.read} for p in d.more_pages]
             results.append(out)
@@ -397,7 +403,7 @@ class Tools:
             pngs = list(pool.map(lambda page: self._client.documents.page_image(document_id, page), pictured))
         out = {"document_id": document_id,
                "pages": [{"page": p.page, "read": p.read, "text": p.text,
-                          **({"note": "Its text may be incomplete: see its picture."} if p.read == "image" else {})}
+                          **({"note": SEE_PICTURE} if p.read == "image" else {})}
                          for p in texts]}
         return ToolResult(_text(out), [PageImage(document_id, page, png) for page, png in zip(pictured, pngs)])
 
