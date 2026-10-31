@@ -1,4 +1,4 @@
-"""Tools an LLM agent can call: find which documents answer, search the pages of the ones it picks (with their
+"""Tools an LLM agent can call: list documents by their metadata, find which documents answer, search the pages of the ones it picks (with their
 text), read pages, with pictures of those best seen, and zoom in on a part of a page too small to read.
 
     tools = client.tools(collection=filings)
@@ -21,9 +21,14 @@ if TYPE_CHECKING:
 MAX_PAGES_READ = 20  # pages one read_pages call may read
 MAX_IMAGES = 5  # pictures one read_pages call may give: each is some thousands of tokens
 MAX_QUESTIONS = 10  # questions one search may ask
-REGION = {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 4, "maxItems": 4,
-          "description": "[top, left, bottom, right] as fractions of the page's height and width, from 0 to 1: "
-                         "[0.3, 0, 0.6, 1] is the band from 30% to 60% of the way down, full width."}
+MAX_LISTED = 100  # documents one list_documents call may list
+CORNERS = ("x0", "y0", "x1", "y1")
+BOX = {"type": "object", "properties": {k: {"type": "number", "minimum": 0, "maximum": 1} for k in CORNERS},
+       "required": list(CORNERS), "additionalProperties": False,
+       "description": "The part to see, as fractions of the page: x from 0 at its left edge to 1 at its right, y from "
+                      "0 at its top to 1 at its bottom; x0, y0 the top left corner, x1, y1 the bottom right. "
+                      '{"x0": 0, "y0": 0.3, "x1": 1, "y1": 0.6} is the band from 30% to 60% of the way down, full '
+                      "width."}
 
 QUESTIONS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_QUESTIONS,
              "description": "The questions, as a person would ask them: several at once cost much less than one "
@@ -72,16 +77,16 @@ def _number(n: float | None) -> str:
 
 @dataclass
 class PageImage:
-    """A page as PNG bytes, or, with region, part of it."""
+    """A page as PNG bytes, or, with box, part of it: x0, y0, x1, y1."""
     document_id: str
     page: int
     png: bytes
-    region: list[float] | None = None
+    box: dict[str, float] | None = None
 
     @property
     def label(self) -> str:
         """What the picture is, to put before it: "Page 7 of doc_...:"."""
-        part = f", region {self.region}" if self.region is not None else ""
+        part = "" if self.box is None else ", " + ", ".join(f"{k} {_number(v)}" for k, v in self.box.items())
         return f"Page {self.page} of {self.document_id}{part}:"
 
     @property
@@ -113,7 +118,7 @@ class ToolResult:
 
 
 class Tools:
-    """search_documents, search_pages, read_pages, view_pages and zoom_page over a scope: a collection, documents whose
+    """list_documents, search_documents, search_pages, read_pages, view_pages and zoom_page over a scope: a collection, documents whose
     metadata meets a filter, or all of yours. The metadata schema is read once, when made; make new ones when the documents change."""
 
     def __init__(self, client: PageSearch, *, collection: Collection | str | None = None,
@@ -126,8 +131,8 @@ class Tools:
             self.schema = client.collections.schema(self._collection)
         else:
             self.schema = client.documents.schema(collection=self._collection, filter=filter)
-        self.definitions = [self._search_documents(), self._search_pages(), self._read_pages(), self._view_pages(),
-                            self._zoom_page()]
+        self.definitions = [self._list_documents(), self._search_documents(), self._search_pages(), self._read_pages(),
+                            self._view_pages(), self._zoom_page()]
 
     @property
     def openai(self) -> list[dict[str, Any]]:
@@ -161,23 +166,47 @@ class Tools:
 
         return [tool(d) for d in self.definitions]
 
+    def _list_documents(self) -> dict[str, Any]:
+        return {
+            "name": "list_documents",
+            "description": (
+                f"List the documents, of {self.schema.documents}, whose metadata meets a filter, newest first, each "
+                "with its id, file name, page count, upload time and metadata, and how many match in all. Free. When the question says which documents it "
+                "is about in terms the metadata holds, find them here and search their pages with search_pages; use "
+                "search_documents, which is priced, only when a filter cannot pick them out: none match, too many "
+                "do, or the question says only what it asks.\n\n" + describe(self.schema) + "\n\n" + FILTERS
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "filter": {"type": "object", "description": "Only documents whose metadata meets this; without "
+                                                                "it, all."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LISTED,
+                              "description": "At most this many documents (20 by default)."},
+                    "offset": {"type": "integer", "minimum": 0,
+                               "description": "Skip this many first, for the next page: the offset a list gave back."},
+                },
+            },
+        }
+
     def _search_documents(self) -> dict[str, Any]:
         return {
             "name": "search_documents",
             "description": (
                 f"Find which of {self.schema.documents} documents likely answer each question, most relevant first, "
-                "with each one's relevance (0 to 1), page count and metadata. Narrow them with a metadata filter "
-                "when the question names something the metadata holds, such as a company or a year. Then call "
-                "search_pages with the documents worth reading. Searching a document's pages is priced by its pages, so "
-                "search the most relevant documents first, and others only when the question needs them or those did "
-                "not answer. Use top_k \"auto\": it returns the documents likely "
-                "to help, which is best.\n\n" + describe(self.schema) + "\n\n" + FILTERS
+                "with each one's relevance (0 to 1), page count and metadata; always at least one. Priced by the "
+                "documents it looks at: when a metadata filter alone picks the documents, use list_documents, which "
+                "is free, and when it narrows them, pass it here. Then call search_pages with the documents worth "
+                "reading. Searching a document's pages is priced by its pages, so search the most relevant documents "
+                "first, and others only when the question needs them or those did not answer. Use top_k \"auto\": "
+                "it returns the documents likely to help, which is best."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "questions": QUESTIONS,
-                    "filter": {"type": "object", "description": "Only documents whose metadata meets this."},
+                    "filter": {"type": "object", "description": "Only documents whose metadata meets this, written "
+                                                                "as for list_documents."},
                     "top_k": _top_k("documents"),
                 },
                 "required": ["questions"],
@@ -264,9 +293,9 @@ class Tools:
                 "properties": {
                     "document_id": {"type": "string"},
                     "page": {"type": "integer", "minimum": 1},
-                    "region": REGION,
+                    "box": BOX,
                 },
-                "required": ["document_id", "page", "region"],
+                "required": ["document_id", "page", "box"],
             },
         }
 
@@ -278,6 +307,8 @@ class Tools:
             input = {**input, "questions": input["question"]}
             del input["question"]
         try:
+            if name == "list_documents":
+                return ToolResult(_text(self.list_documents(**input)))
             if name == "search_documents":
                 return ToolResult(_text(self.search_documents(**input)))
             if name == "search_pages":
@@ -295,15 +326,35 @@ class Tools:
             out = {"error": f"Bad input for {name}: {error}"}
         return ToolResult(_text(out))
 
+    def list_documents(self, filter: dict[str, Any] | None = None, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+        if not 1 <= int(limit) <= MAX_LISTED:
+            raise ValueError(f"limit is 1 to {MAX_LISTED}")
+        if int(offset) < 0:
+            raise ValueError("offset is 0 or more")
+        page = self._client.documents.list(limit=int(limit), offset=int(offset), collection=self._collection,
+                                           filter=self._scope(filter))
+        out: dict[str, Any] = {"total": page.total, "documents": [
+            {"document_id": d.id, "filename": d.filename, "pages": d.pages, "status": d.status,
+             "created_at": d.created_at, "metadata": d.metadata} for d in page.data]}
+        if page.has_more and page.data:
+            last = page.offset + len(page.data)
+            out["more"] = (f"Documents {page.offset + 1} to {last} of {page.total}. Next page: offset {last}, with "
+                           "the same filter; or narrow the filter.")
+        return out
+
     def search_documents(self, questions: list[str] | str, filter: dict[str, Any] | None = None,
                          top_k: int | str | None = None) -> dict[str, Any]:
-        scope = self._filter if filter is None else filter if self._filter is None else {"$and": [self._filter, filter]}
+        scope = self._scope(filter)
         found = self._client.documents.search(_asked(questions), collection=self._collection, filter=scope,
                                               top_k=_auto(top_k))
         return {"results": [{"question": a.question,
                              "documents": [{"document_id": d.document_id, "filename": d.filename, "pages": d.pages,
                                             "relevance": d.relevance, "metadata": d.metadata} for d in a.documents]}
                             for a in found.results]}
+
+    def _scope(self, filter: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The filter the agent gave, within the one the tools were made with."""
+        return self._filter if filter is None else filter if self._filter is None else {"$and": [self._filter, filter]}
 
     def search_pages(self, questions: list[str] | str, document_id: str, top_k: int | str | None = None) -> dict[str, Any]:
         found = self._client.search(_asked(questions), document=document_id, top_k=_auto(top_k), include_text=True)
@@ -324,10 +375,12 @@ class Tools:
     def view_pages(self, document_id: str, pages: list[int]) -> ToolResult:
         return self._pages(document_id, pages, MAX_IMAGES, lambda p: True)
 
-    def zoom_page(self, document_id: str, page: int, region: list[float]) -> ToolResult:
-        box = [float(v) for v in region]
-        png = self._client.documents.page_image(document_id, page, region=box)
-        return ToolResult(_text({"document_id": document_id, "page": page, "region": box}),
+    def zoom_page(self, document_id: str, page: int, box: dict[str, float]) -> ToolResult:
+        if not isinstance(box, dict) or set(box) != set(CORNERS):
+            raise ValueError('box is {"x0": ..., "y0": ..., "x1": ..., "y1": ...}, fractions of the page')
+        box = {k: float(box[k]) for k in CORNERS}
+        png = self._client.documents.page_image(document_id, page, box=[box[k] for k in CORNERS])
+        return ToolResult(_text({"document_id": document_id, "page": page, "box": box}),
                           [PageImage(document_id, page, png, box)])
 
     def _pages(self, document_id: str, pages: list[int], most: int, pictured_if) -> ToolResult:

@@ -211,19 +211,20 @@ class Schema:
 
 
 class DocumentPage:
-    """One page of your documents, newest first: data, and has_more. Iterating it goes on through the pages
-    after it, so a for loop over client.documents.list() sees every document."""
+    """One page of your documents, newest first: data, has_more, total (how many there are in all) and offset (how
+    many come before this page). Iterating it goes on through the pages after it, so a for loop over
+    client.documents.list() sees every document."""
 
-    def __init__(self, documents: "Documents", data: list[Document], has_more: bool, limit: int,
-                 collection: Collection | str | None = None, filter: dict[str, Any] | None = None):
-        self._documents, self.data, self.has_more, self._limit = documents, data, has_more, limit
-        self._collection, self._filter = collection, filter
+    def __init__(self, documents: "Documents", data: list[Document], has_more: bool, total: int, limit: int,
+                 offset: int, collection: Collection | str | None = None, filter: dict[str, Any] | None = None):
+        self._documents, self.data, self.has_more, self.total = documents, data, has_more, total
+        self._limit, self.offset, self._collection, self._filter = limit, offset, collection, filter
 
     def next_page(self) -> DocumentPage | None:
         if not self.has_more or not self.data:
             return None
-        return self._documents.list(limit=self._limit, after=self.data[-1].id, collection=self._collection,
-                                    filter=self._filter)
+        return self._documents.list(limit=self._limit, offset=self.offset + len(self.data),
+                                    collection=self._collection, filter=self._filter)
 
     def __iter__(self) -> Iterator[Document]:
         page: DocumentPage | None = self
@@ -233,16 +234,18 @@ class DocumentPage:
 
 
 class CollectionPage:
-    """One page of your collections, newest first: data, and has_more. Iterating it goes on through the pages
-    after it, as DocumentPage does."""
+    """One page of your collections, newest first: data, has_more, total and offset, as DocumentPage. Iterating it
+    goes on through the pages after it, as DocumentPage does."""
 
-    def __init__(self, collections: "Collections", data: list[Collection], has_more: bool, limit: int):
-        self._collections, self.data, self.has_more, self._limit = collections, data, has_more, limit
+    def __init__(self, collections: "Collections", data: list[Collection], has_more: bool, total: int, limit: int,
+                 offset: int):
+        self._collections, self.data, self.has_more, self.total = collections, data, has_more, total
+        self._limit, self.offset = limit, offset
 
     def next_page(self) -> CollectionPage | None:
         if not self.has_more or not self.data:
             return None
-        return self._collections.list(limit=self._limit, after=self.data[-1].id)
+        return self._collections.list(limit=self._limit, offset=self.offset + len(self.data))
 
     def __iter__(self) -> Iterator[Collection]:
         page: CollectionPage | None = self
@@ -308,24 +311,24 @@ class Documents:
         return _make(Document, self._client._request("PATCH", f"/documents/{_id(document)}",
                                                      json={"metadata": metadata}))
 
-    def list(self, *, limit: int = 20, after: str | None = None, collection: Collection | str | None = None,
+    def list(self, *, limit: int = 20, offset: int = 0, collection: Collection | str | None = None,
              filter: dict[str, Any] | None = None) -> DocumentPage:
         """Your documents, newest first, or those in a collection, or whose metadata meets filter (such as
-        {"year": {"$gte": 2020}}); limit (1 to 100) a page; after: the last id of the page before.
+        {"year": {"$gte": 2020}}): limit (1 to 100) of them, after the first offset.
 
-            for doc in client.documents.list():          # every document, a page at a time
-            page = client.documents.list(limit=10)       # one page: page.data, page.has_more
+            for doc in client.documents.list():                  # every document, a page at a time
+            page = client.documents.list(limit=10, offset=20)    # the third page: page.data, page.total
         """
         params: dict[str, Any] = {"limit": limit}
-        if after:
-            params["after"] = after
+        if offset:
+            params["offset"] = offset
         if collection is not None:
             params["collection_id"] = _id(collection)
         if filter is not None:
             params["filter"] = json.dumps(filter)
         page = self._client._request("GET", "/documents", params=params)
-        return DocumentPage(self, [_make(Document, d) for d in page["data"]], page["has_more"], limit,
-                            collection, filter)
+        return DocumentPage(self, [_make(Document, d) for d in page["data"]], page["has_more"], page["total"], limit,
+                            offset, collection, filter)
 
     def schema(self, *, collection: Collection | str | None = None, filter: dict[str, Any] | None = None) -> Schema:
         """The metadata keys of your documents, or of those in a collection, or meeting filter: each key's types,
@@ -343,10 +346,10 @@ class Documents:
                                      params={"pages": ",".join(str(p) for p in pages)})
         return [_make(PageText, p) for p in data["data"]]
 
-    def page_image(self, document: Document | str, page: int, region: Sequence[float] | None = None) -> bytes:
-        """The page as PNG bytes, no side past 1568 pixels. With region, (top, left, bottom, right) as fractions of
-        the page's height and width, only that part of it, drawn sharper: to read small print."""
-        params = {"region": ",".join(str(v) for v in region)} if region is not None else None
+    def page_image(self, document: Document | str, page: int, box: Sequence[float] | None = None) -> bytes:
+        """The page as PNG bytes, no side past 1568 pixels. With box, (x0, y0, x1, y1) as fractions of the page's
+        width and height from its top left, only that part of it, drawn sharper: to read small print."""
+        params = {"box": ",".join(str(v) for v in box)} if box is not None else None
         return self._client._request("GET", f"/documents/{_id(document)}/pages/{page}/image", raw=True, params=params)
 
     def delete(self, document: Document | str) -> None:
@@ -377,9 +380,9 @@ class Documents:
         return DocumentSearchResult._from(self._client._request("POST", "/documents/search", json=body,
                                                                 headers=headers))
 
-    def __call__(self, *, limit: int = 20, after: str | None = None) -> builtins.list[Document]:
+    def __call__(self, *, limit: int = 20, offset: int = 0) -> builtins.list[Document]:
         _renamed("client.documents()", "client.documents.list().data")
-        return self.list(limit=limit, after=after).data
+        return self.list(limit=limit, offset=offset).data
 
 
 class Collections:
@@ -393,13 +396,15 @@ class Collections:
     def create(self, name: str) -> Collection:
         return _make(Collection, self._client._request("POST", "/collections", json={"name": name}))
 
-    def list(self, *, limit: int = 20, after: str | None = None) -> CollectionPage:
-        """Your collections, newest first, limit (1 to 100) a page. Loop over it for every collection."""
+    def list(self, *, limit: int = 20, offset: int = 0) -> CollectionPage:
+        """Your collections, newest first: limit (1 to 100) of them, after the first offset. Loop over it for every
+        collection."""
         params: dict[str, Any] = {"limit": limit}
-        if after:
-            params["after"] = after
+        if offset:
+            params["offset"] = offset
         page = self._client._request("GET", "/collections", params=params)
-        return CollectionPage(self, [_make(Collection, c) for c in page["data"]], page["has_more"], limit)
+        return CollectionPage(self, [_make(Collection, c) for c in page["data"]], page["has_more"], page["total"],
+                              limit, offset)
 
     def get(self, collection_id: str) -> Collection:
         return _make(Collection, self._client._request("GET", f"/collections/{collection_id}"))
@@ -517,7 +522,7 @@ class PageSearch:
         return SearchResult._from(self._request("POST", "/search", json=body, headers=headers))
 
     def tools(self, *, collection: Collection | str | None = None, filter: dict[str, Any] | None = None) -> "Tools":
-        """search_documents, search_pages, read_pages, view_pages and zoom_page, for an LLM agent to call, over a
+        """list_documents, search_documents, search_pages, read_pages, view_pages and zoom_page, for an LLM agent to call, over a
         collection, documents whose metadata meets filter, or all of yours. Their descriptions hold the metadata schema, read now, so the agent can write
         filters: pass tools.definitions (or tools.openai) to the model and tools.run(name, input) its tool calls."""
         from ._tools import Tools

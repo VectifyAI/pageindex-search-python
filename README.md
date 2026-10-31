@@ -80,13 +80,15 @@ text.
 ```python
 texts = client.documents.pages(doc, [38, 39])   # each with .text and .read
 png = client.documents.page_image(doc, 38)       # PNG bytes
-part = client.documents.page_image(doc, 38, region=(0.3, 0, 0.6, 1))  # a band of it, sharper
+part = client.documents.page_image(doc, 38, box=(0, 0.3, 1, 0.6))  # a band of it, sharper
 ```
 
 ## Agents
 
-`client.tools()` gives an LLM agent five tools over your documents: `search_documents` (with your metadata's keys
-and values in its description, so the agent can write filters), `search_pages` (with each page's text),
+`client.tools()` gives an LLM agent six tools over your documents: `list_documents` (free: documents whose metadata
+meets a filter, with your metadata's keys and values in its description, so the agent can write filters),
+`search_documents` (which documents answer a question, for when a filter cannot pick them), `search_pages` (with each
+page's text),
 `read_pages` (text, with a picture of any page that is one), `view_pages` (pages as pictures) and `zoom_page`
 (part of a page, sharper, for small print).
 
@@ -117,9 +119,9 @@ print(Runner.run_sync(agent, "What was capital expenditure in 2018?").final_outp
 | `documents.upload(file, collection=None, metadata=None, wait=True)` | A path, bytes or an open file. Returns a `Document`, ready to search unless `wait=False`. |
 | `search(questions, document=None, documents=None, collection=None, filter=None, max_documents=None, document_top_k=None, top_k=None, include_text=False, idempotency_key=None)` | Up to 10 questions. For each, the pages that help, under the documents they are in: of one document, or across documents (those named, a collection's, those meeting `filter`, or all), whose most relevant are opened: those likely to answer, at most `max_documents` (default 3), or exactly `document_top_k`. Each document lists the pages likely to help, or exactly `top_k`, each with how it is best read, and with `include_text`, its text; without `top_k`, `more_pages` lists the next most relevant, without text. A search retried after a timeout is not charged twice. |
 | `documents.search(questions, document_ids=None, collection=None, filter=None, top_k=None, idempotency_key=None)` | Up to 10 questions of your documents (all of them, up to 1,000, those named, or a collection's). Each answer lists the documents likely to hold it, or exactly `top_k`. Each document is priced at the document search price. |
-| `documents.list(limit=20, after=None, collection=None, filter=None)` | Your documents, newest first, or a collection's, or those whose metadata meets `filter`. Loop over it for every document; `.data` and `.has_more` are one page. |
+| `documents.list(limit=20, offset=0, collection=None, filter=None)` | Your documents, newest first, or a collection's, or those whose metadata meets `filter`: `limit` of them after the first `offset`. Loop over it for every document; `.data`, `.has_more` and `.total` (how many in all) are one page. |
 | `documents.get(id)`, `documents.delete(document)` | One document; delete one. |
-| `documents.pages(document, pages)`, `documents.page_image(document, page, region=None)` | The text of up to 20 pages, each with how it is best read; a page as PNG bytes, or with `region` (top, left, bottom, right as fractions) part of it, sharper. |
+| `documents.pages(document, pages)`, `documents.page_image(document, page, box=None)` | The text of up to 20 pages, each with how it is best read; a page as PNG bytes, or with `box` (x0, y0, x1, y1 as fractions of the page from its top left) part of it, sharper. |
 | `tools(collection=None, filter=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, `.openai_agents()` (OpenAI Agents SDK), and `.run(name, input)`. |
 | `documents.update(document, metadata=)` | Set metadata keys; `None` removes one. |
 | `collections.schema(collection)`, `documents.schema(collection=None, filter=None)` | The metadata keys the documents have: each key's types, how many documents have it, its least and greatest numbers and commonest strings. Counted as they are now; nothing is enforced. |

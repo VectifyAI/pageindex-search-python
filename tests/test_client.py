@@ -53,24 +53,27 @@ def test_list_pages_on_when_iterated():
     seen = []
 
     def handler(request):
-        after = request.url.params.get("after")
-        seen.append(after)
-        start = 0 if after is None else int(after.split("_")[1]) + 1
+        offset = request.url.params.get("offset")
+        seen.append(offset)
+        start = int(offset or 0)
         page = docs[start:start + 2]
-        return httpx.Response(200, json={"object": "list", "data": page, "has_more": start + 2 < len(docs)})
+        return httpx.Response(200, json={"object": "list", "data": page, "has_more": start + 2 < len(docs),
+                                         "total": len(docs)})
 
     pages = client(handler)
     first = pages.documents.list(limit=2)
-    assert [d.id for d in first.data] == ["doc_0", "doc_1"] and first.has_more
+    assert [d.id for d in first.data] == ["doc_0", "doc_1"] and first.has_more and first.total == 5
     assert [d.id for d in pages.documents.list(limit=2)] == [f"doc_{i}" for i in range(5)]
-    assert seen[1:] == [None, "doc_1", "doc_3"]
+    assert seen[1:] == [None, "2", "4"]
+    third = pages.documents.list(limit=2, offset=4)
+    assert [d.id for d in third.data] == ["doc_4"] and not third.has_more and third.offset == 4
 
 
 def test_old_names_still_work_and_warn():
     doc = {"object": "document", "id": "doc_1", "status": "ready", "filename": "a.pdf", "pages": 1, "bytes": 4,
            "created_at": "2026-10-27T00:00:00Z"}
     pages = client(lambda request: httpx.Response(200, json=doc if request.method == "GET" and "doc_1" in str(request.url)
-                                                  else {"object": "list", "data": [doc], "has_more": False}))
+                                                  else {"object": "list", "data": [doc], "has_more": False, "total": 1}))
     with pytest.warns(DeprecationWarning, match="documents.get"):
         assert pages.document("doc_1").id == "doc_1"
     with pytest.warns(DeprecationWarning, match="documents.list"):
@@ -115,7 +118,7 @@ def test_collections():
         if request.url.path == "/v1/documents" and request.method == "POST":
             return httpx.Response(200, json=doc)
         if request.url.path == "/v1/documents":
-            return httpx.Response(200, json={"object": "list", "data": [doc], "has_more": False})
+            return httpx.Response(200, json={"object": "list", "data": [doc], "has_more": False, "total": 1})
         return httpx.Response(200, json=col)
 
     pages = client(handler)
@@ -141,7 +144,7 @@ def test_metadata_and_filters():
     def handler(request):
         sent.append(request)
         if request.url.path == "/v1/documents" and request.method == "GET":
-            return httpx.Response(200, json={"object": "list", "data": [doc], "has_more": False})
+            return httpx.Response(200, json={"object": "list", "data": [doc], "has_more": False, "total": 1})
         if request.url.path == "/v1/documents/search":
             return httpx.Response(200, json={"object": "document_search", "id": "s", "results": [],
                                              "failed_documents": [], "processing_documents": [], "usage": None})
@@ -225,14 +228,15 @@ def test_tools():
          "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}]}],
         "failed_documents": [], "processing_documents": []}
     sent = []
-    images = []  # each picture asked for: its region, or None
+    images = []  # each picture asked for: its box, or None
+    listed = []  # each list of documents asked for: its query
 
     def handler(request):
         if request.url.path.endswith("/schema"):
             return httpx.Response(200, json=schema)
         sent.append((request.url.path, json.loads(request.content) if request.content else None))
         if request.url.path.endswith("/image"):
-            images.append(request.url.params.get("region"))
+            images.append(request.url.params.get("box"))
             return httpx.Response(200, content=b"\x89PNG...", headers={"content-type": "image/png"})
         if request.url.path.endswith("/pages"):
             if request.url.params["pages"] == "99":
@@ -240,6 +244,11 @@ def test_tools():
             return httpx.Response(200, json={"object": "list", "document_id": "doc_1", "data": [
                 {"object": "page", "page": int(p), "read": "image" if p == "7" else "text", "text": f"text {p}"}
                 for p in request.url.params["pages"].split(",")]})
+        if request.method == "GET" and request.url.path == "/v1/documents":
+            listed.append(dict(request.url.params))
+            return httpx.Response(200, json={"object": "list", "has_more": True, "total": 87, "data": [
+                {"object": "document", "id": "doc_1", "filename": "a.pdf", "status": "ready", "pages": 9,
+                 "bytes": 1, "metadata": {"year": 2018}, "created_at": "2026-01-01T00:00:00Z"}]})
         if request.url.path.endswith("/documents/search"):
             if "bad" in sent[-1][1].get("filter", {}).get("$and", [{}, {}])[1]:
                 return httpx.Response(422, json={"error": {"code": "invalid_filter", "message": "No such condition."}})
@@ -251,8 +260,21 @@ def test_tools():
     first = tools.definitions[0]["description"]
     assert '- ticker: string, on 3 documents; values: "MMM" (2), and others' in first
     assert "- year: number, on 3 documents; 2018 to 2024" in first
-    assert [t["function"]["name"] for t in tools.openai] == ["search_documents", "search_pages", "read_pages",
-                                                              "view_pages", "zoom_page"]
+    assert [t["function"]["name"] for t in tools.openai] == ["list_documents", "search_documents", "search_pages",
+                                                              "read_pages", "view_pages", "zoom_page"]
+
+    out = json.loads(tools.run_text("list_documents", {"filter": {"year": 2018}, "limit": 5}))
+    assert out == {"total": 87, "documents": [{"document_id": "doc_1", "filename": "a.pdf", "pages": 9,
+                                               "status": "ready", "created_at": "2026-01-01T00:00:00Z",
+                                               "metadata": {"year": 2018}}],
+                   "more": "Documents 1 to 1 of 87. Next page: offset 1, with the same filter; or narrow the filter."}
+    assert listed[-1] == {"limit": "5", "collection_id": "col_1",
+                          "filter": json.dumps({"$and": [{"audited": True}, {"year": 2018}]})}
+    assert json.loads(tools.run_text("list_documents", {}))["documents"] and listed[-1]["limit"] == "20"
+    out = json.loads(tools.run_text("list_documents", {"filter": {"year": 2018}, "offset": 40}))
+    assert listed[-1]["offset"] == "40" and out["more"].startswith("Documents 41 to 41 of 87. Next page: offset 41")
+    assert "error" in json.loads(tools.run_text("list_documents", {"offset": -1}))
+    assert "error" in json.loads(tools.run_text("list_documents", {"limit": 500}))
 
     out = json.loads(tools.run_text("search_documents", {"questions": ["q"], "filter": {"year": 2018}}))
     assert out["results"][0]["documents"][0]["document_id"] == "doc_1"
@@ -281,11 +303,13 @@ def test_tools():
     out = tools.run("view_pages", {"document_id": "doc_1", "pages": [4, 9]})
     assert [p["page"] for p in json.loads(out.text)["pages"]] == [4, 9] and [i.page for i in out.images] == [4, 9]
     assert "error" in json.loads(tools.run_text("view_pages", {"document_id": "doc_1", "pages": [1, 2, 3, 4, 5, 6]}))
-    out = tools.run("zoom_page", {"document_id": "doc_1", "page": 4, "region": [0.3, 0, 0.6, 1]})
-    assert json.loads(out.text) == {"document_id": "doc_1", "page": 4, "region": [0.3, 0.0, 0.6, 1.0]}
-    assert images[-1] == "0.3,0.0,0.6,1.0" and out.images[0].png == b"\x89PNG..."
-    assert out.anthropic()[1] == {"type": "text", "text": "Page 4 of doc_1, region [0.3, 0.0, 0.6, 1.0]:"}
-    assert "error" in json.loads(tools.run_text("zoom_page", {"document_id": "doc_1", "page": 4, "region": ["x", 0, 1, 1]}))
+    out = tools.run("zoom_page", {"document_id": "doc_1", "page": 4, "box": {"y0": 0.3, "x0": 0, "x1": 1, "y1": 0.6}})
+    assert json.loads(out.text) == {"document_id": "doc_1", "page": 4,
+                                    "box": {"x0": 0.0, "y0": 0.3, "x1": 1.0, "y1": 0.6}}
+    assert images[-1] == "0.0,0.3,1.0,0.6" and out.images[0].png == b"\x89PNG..."
+    assert out.anthropic()[1] == {"type": "text", "text": "Page 4 of doc_1, x0 0, y0 0.3, x1 1, y1 0.6:"}
+    for bad in ([0, 0.3, 1, 0.6], {"x0": "x", "y0": 0, "x1": 1, "y1": 1}, {"x0": 0, "y0": 0, "x1": 1}):
+        assert "error" in json.loads(tools.run_text("zoom_page", {"document_id": "doc_1", "page": 4, "box": bad})), bad
     assert tools.run("search_documents", {"question": "q"}).anthropic().startswith('{"results"')
     assert json.loads(tools.run_text("read_pages", {"document_id": "doc_1", "pages": [99]})) == {"error": "There is no page 99."}
     assert "error" in json.loads(tools.run_text("read_pages", {"document_id": "doc_1"}))
@@ -305,9 +329,10 @@ def test_openai_agents_tools():
 
     import asyncio
     tools = client(handler).tools().openai_agents()
-    assert [t.name for t in tools] == ["search_documents", "search_pages", "read_pages", "view_pages", "zoom_page"]
+    assert [t.name for t in tools] == ["list_documents", "search_documents", "search_pages", "read_pages",
+                                       "view_pages", "zoom_page"]
     assert all(isinstance(t, agents.FunctionTool) and not t.strict_json_schema for t in tools)
-    out = asyncio.run(tools[2].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
+    out = asyncio.run(tools[3].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
     assert isinstance(out[0], agents.ToolOutputText) and out[1].text == "Page 7 of doc_1:"
     assert out[2].image_url.startswith("data:image/png;base64,")
 
