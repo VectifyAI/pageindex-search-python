@@ -1,4 +1,4 @@
-"""Tools an LLM agent can call: list documents by their metadata, find which documents answer, search the pages of the ones it picks (with their
+"""Tools an LLM agent can call: list collections, list documents by their metadata, find which documents answer, search the pages of the ones it picks (with their
 text), read pages, with pictures of those best seen, and zoom in on a part of a page too small to read.
 
     tools = client.tools(collection=filings)
@@ -38,6 +38,8 @@ SEE_PICTURE = ("A picture: its text may be incomplete or wrong. Read what you ne
 QUESTIONS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_QUESTIONS,
              "description": "The questions, as a person would ask them: several at once cost much less than one "
                             "at a time, so ask together the questions you have of the same documents."}
+
+COLLECTION_ID = {"type": "string", "description": "Only documents in this collection, its id from list_collections."}
 
 FILTERS = ('Conditions: {"key": value} equals; {"key": {"$ne"|"$in"|"$nin"|"$gt"|"$gte"|"$lt"|"$lte": ...}}; '
            '{"$and": [...]} and {"$or": [...]} combine filters. Values match exactly, type included: "2018" is not '
@@ -128,8 +130,8 @@ class ToolResult:
 
 
 class Tools:
-    """list_documents, search_documents, search_pages, read_pages, view_pages and zoom_page over a scope: a collection, documents whose
-    metadata meets a filter, or all of yours. The metadata schema is read once, when made; make new ones when the documents change."""
+    """list_collections, list_documents, search_documents, search_pages, read_pages, view_pages and zoom_page over a scope: a
+    collection, documents whose metadata meets a filter, or all of yours; with all of them, the agent picks a collection itself. The metadata schema is read once, when made; make new ones when the documents change."""
 
     def __init__(self, client: PageSearch, *, collection: Collection | str | None = None,
                  filter: dict[str, Any] | None = None):
@@ -141,8 +143,8 @@ class Tools:
             self.schema = client.collections.schema(self._collection)
         else:
             self.schema = client.documents.schema(collection=self._collection, filter=filter)
-        self.definitions = [self._list_documents(), self._search_documents(), self._search_pages(), self._read_pages(),
-                            self._view_pages(), self._zoom_page()]
+        self.definitions = [self._list_collections(), self._list_documents(), self._search_documents(),
+                            self._search_pages(), self._read_pages(), self._view_pages(), self._zoom_page()]
 
     @property
     def openai(self) -> list[dict[str, Any]]:
@@ -182,6 +184,25 @@ class Tools:
         from ._mcp import server
         return server(self, name=name)
 
+    def _list_collections(self) -> dict[str, Any]:
+        return {
+            "name": "list_collections",
+            "description": (
+                "List the collections, named groups of documents, newest first, each with its id, name and how many "
+                "documents it holds, and how many there are in all. Free. When the question names a collection, find "
+                "its id here and pass it as collection_id to list_documents or search_documents."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LISTED,
+                              "description": "At most this many collections (20 by default)."},
+                    "offset": {"type": "integer", "minimum": 0,
+                               "description": "Skip this many first, for the next page: the offset a list gave back."},
+                },
+            },
+        }
+
     def _list_documents(self) -> dict[str, Any]:
         return {
             "name": "list_documents",
@@ -190,13 +211,15 @@ class Tools:
                 "with its id, file name, page count, upload time and metadata, and how many match in all. Free. When the question says which documents it "
                 "is about in terms the metadata holds, find them here and search their pages with search_pages; use "
                 "search_documents, which is priced, only when a filter cannot pick them out: none match, too many "
-                "do, or the question says only what it asks.\n\n" + describe(self.schema) + "\n\n" + FILTERS
+                "do, or the question says only what it asks. Pass collection_id for one collection's documents.\n\n"
+                + describe(self.schema) + "\n\n" + FILTERS
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "filter": {"type": "object", "description": "Only documents whose metadata meets this; without "
                                                                 "it, all."},
+                    "collection_id": COLLECTION_ID,
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LISTED,
                               "description": "At most this many documents (20 by default)."},
                     "offset": {"type": "integer", "minimum": 0,
@@ -225,6 +248,7 @@ class Tools:
                     "questions": QUESTIONS,
                     "filter": {"type": "object", "description": "Only documents whose metadata meets this, written "
                                                                 "as for list_documents."},
+                    "collection_id": COLLECTION_ID,
                     "top_k": _top_k("documents"),
                 },
                 "required": ["questions"],
@@ -330,6 +354,8 @@ class Tools:
             input = {**input, "questions": input["question"]}
             del input["question"]
         try:
+            if name == "list_collections":
+                return ToolResult(_text(self.list_collections(**input)))
             if name == "list_documents":
                 return ToolResult(_text(self.list_documents(**input)))
             if name == "search_documents":
@@ -349,12 +375,23 @@ class Tools:
             out = {"error": f"Bad input for {name}: {error}"}
         return ToolResult(_text(out))
 
-    def list_documents(self, filter: dict[str, Any] | None = None, limit: int = 20, offset: int = 0) -> dict[str, Any]:
-        if not 1 <= int(limit) <= MAX_LISTED:
-            raise ValueError(f"limit is 1 to {MAX_LISTED}")
-        if int(offset) < 0:
-            raise ValueError("offset is 0 or more")
-        page = self._client.documents.list(limit=int(limit), offset=int(offset), collection=self._collection,
+    def list_collections(self, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+        _paged(limit, offset)
+        if self._collection is not None:  # the tools see this collection only
+            c = self._client.collections.get(self._collection)
+            return {"total": 1, "collections": [{"collection_id": c.id, "name": c.name, "documents": c.documents}]}
+        page = self._client.collections.list(limit=int(limit), offset=int(offset))
+        out: dict[str, Any] = {"total": page.total, "collections": [
+            {"collection_id": c.id, "name": c.name, "documents": c.documents} for c in page.data]}
+        if page.has_more and page.data:
+            last = page.offset + len(page.data)
+            out["more"] = f"Collections {page.offset + 1} to {last} of {page.total}. Next page: offset {last}."
+        return out
+
+    def list_documents(self, filter: dict[str, Any] | None = None, limit: int = 20, offset: int = 0,
+                       collection_id: str | None = None) -> dict[str, Any]:
+        _paged(limit, offset)
+        page = self._client.documents.list(limit=int(limit), offset=int(offset), collection=self._in(collection_id),
                                            filter=self._scope(filter))
         out: dict[str, Any] = {"total": page.total, "documents": [
             {"document_id": d.id, "filename": d.filename, "pages": d.pages, "status": d.status,
@@ -366,15 +403,21 @@ class Tools:
         return out
 
     def search_documents(self, questions: list[str] | str, filter: dict[str, Any] | None = None,
-                         top_k: int | str | None = None) -> dict[str, Any]:
+                         top_k: int | str | None = None, collection_id: str | None = None) -> dict[str, Any]:
         scope = self._scope(filter)
-        found = self._client.documents.search(_asked(questions), collection=self._collection, filter=scope,
+        found = self._client.documents.search(_asked(questions), collection=self._in(collection_id), filter=scope,
                                               top_k=_auto(top_k))
         doc = lambda d: {"document_id": d.document_id, "filename": d.filename, "pages": d.pages,
                          "relevance": d.relevance, "metadata": d.metadata}
         return {"results": [{"question": a.question, "documents": [doc(d) for d in a.documents],
                              **({"more_documents": [doc(d) for d in a.more_documents]} if a.more_documents else {})}
                             for a in found.results], **_cost(found.usage)}
+
+    def _in(self, collection_id: str | None) -> str | None:
+        """The collection the agent named, within the one the tools were made with."""
+        if self._collection is not None and collection_id not in (None, self._collection):
+            raise ValueError(f"these tools see only collection {self._collection}")
+        return collection_id or self._collection
 
     def _scope(self, filter: dict[str, Any] | None) -> dict[str, Any] | None:
         """The filter the agent gave, within the one the tools were made with."""
@@ -425,6 +468,13 @@ class Tools:
                           **({"note": SEE_PICTURE} if p.read == "image" else {})}
                          for p in texts]}
         return ToolResult(_text(out), [PageImage(document_id, page, png) for page, png in zip(pictured, pngs)])
+
+
+def _paged(limit: int, offset: int) -> None:
+    if not 1 <= int(limit) <= MAX_LISTED:
+        raise ValueError(f"limit is 1 to {MAX_LISTED}")
+    if int(offset) < 0:
+        raise ValueError("offset is 0 or more")
 
 
 def _cost(usage: Any) -> dict[str, Any]:

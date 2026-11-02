@@ -85,7 +85,8 @@ part = client.documents.page_image(doc, 38, box=(0, 0.3, 1, 0.6))  # a band of i
 
 ## Agents
 
-`client.tools()` gives an LLM agent six tools over your documents: `list_documents` (free: documents whose metadata
+`client.tools()` gives an LLM agent seven tools over your documents: `list_collections` (free: your collections, to search one the
+question names), `list_documents` (free: documents whose metadata
 meets a filter, with your metadata's keys and values in its description, so the agent can write filters),
 `search_documents` (which documents answer a question, for when a filter cannot pick them), `search_pages` (with each
 page's text),

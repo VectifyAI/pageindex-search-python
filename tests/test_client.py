@@ -238,6 +238,9 @@ def test_tools():
     def handler(request):
         if request.url.path.endswith("/schema"):
             return httpx.Response(200, json=schema)
+        if request.url.path == "/v1/collections/col_1":
+            return httpx.Response(200, json={"object": "collection", "id": "col_1", "name": "filings", "documents": 3,
+                                             "created_at": "2026-01-01T00:00:00Z"})
         sent.append((request.url.path, json.loads(request.content) if request.content else None))
         if request.url.path.endswith("/image"):
             images.append(request.url.params.get("box"))
@@ -261,11 +264,11 @@ def test_tools():
 
     tools = client(handler).tools(collection="col_1", filter={"audited": True})
     tools.run_text = lambda name, input: tools.run(name, input).text
-    first = tools.definitions[0]["description"]
+    first = tools.definitions[1]["description"]
     assert '- ticker: string, on 3 documents; values: "MMM" (2), and others' in first
     assert "- year: number, on 3 documents; 2018 to 2024" in first
-    assert [t["function"]["name"] for t in tools.openai] == ["list_documents", "search_documents", "search_pages",
-                                                              "read_pages", "view_pages", "zoom_page"]
+    assert [t["function"]["name"] for t in tools.openai] == ["list_collections", "list_documents", "search_documents",
+                                                              "search_pages", "read_pages", "view_pages", "zoom_page"]
 
     out = json.loads(tools.run_text("list_documents", {"filter": {"year": 2018}, "limit": 5}))
     assert out == {"total": 87, "documents": [{"document_id": "doc_1", "filename": "a.pdf", "pages": 9,
@@ -277,6 +280,13 @@ def test_tools():
     assert json.loads(tools.run_text("list_documents", {}))["documents"] and listed[-1]["limit"] == "20"
     out = json.loads(tools.run_text("list_documents", {"filter": {"year": 2018}, "offset": 40}))
     assert listed[-1]["offset"] == "40" and out["more"].startswith("Documents 41 to 41 of 87. Next page: offset 41")
+    # Made for a collection: list_collections gives that one, and another collection is refused.
+    assert json.loads(tools.run_text("list_collections", {})) == {"total": 1, "collections": [
+        {"collection_id": "col_1", "name": "filings", "documents": 3}]}
+    tools.run("list_documents", {"collection_id": "col_1"})
+    assert listed[-1]["collection_id"] == "col_1"
+    assert "only collection col_1" in json.loads(tools.run_text("list_documents", {"collection_id": "col_2"}))["error"]
+    assert "only collection col_1" in json.loads(tools.run_text("search_documents", {"question": "q", "collection_id": "col_2"}))["error"]
     assert "error" in json.loads(tools.run_text("list_documents", {"offset": -1}))
     assert "error" in json.loads(tools.run_text("list_documents", {"limit": 500}))
 
@@ -335,10 +345,10 @@ def test_openai_agents_tools():
 
     import asyncio
     tools = client(handler).tools().openai_agents()
-    assert [t.name for t in tools] == ["list_documents", "search_documents", "search_pages", "read_pages",
-                                       "view_pages", "zoom_page"]
+    assert [t.name for t in tools] == ["list_collections", "list_documents", "search_documents", "search_pages",
+                                       "read_pages", "view_pages", "zoom_page"]
     assert all(isinstance(t, agents.FunctionTool) and not t.strict_json_schema for t in tools)
-    out = asyncio.run(tools[3].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
+    out = asyncio.run(tools[4].on_invoke_tool(None, json.dumps({"document_id": "doc_1", "pages": [7]})))
     assert isinstance(out[0], agents.ToolOutputText) and out[1].text == "Page 7 of doc_1:"
     assert out[2].image_url.startswith("data:image/png;base64,") and out[2].detail == "high"
 
@@ -385,9 +395,39 @@ def test_mcp_server():
 
     import anyio
     listed, read, failed = anyio.run(session)
-    assert [t.name for t in listed] == ["list_documents", "search_documents", "search_pages", "read_pages",
-                                        "view_pages", "zoom_page"]
-    assert listed[3].input_schema["required"] == ["document_id", "pages"] and listed[3].annotations.read_only_hint
+    assert [t.name for t in listed] == ["list_collections", "list_documents", "search_documents", "search_pages",
+                                        "read_pages", "view_pages", "zoom_page"]
+    assert listed[4].input_schema["required"] == ["document_id", "pages"] and listed[4].annotations.read_only_hint
     assert not read.is_error and json.loads(read.content[0].text)["pages"][0]["page"] == 7
     assert read.content[1].text == "Page 7 of doc_1:" and read.content[2].mime_type == "image/png"
     assert failed.is_error and json.loads(failed.content[0].text) == {"error": "There is no page 99."}
+
+
+def test_tools_choose_a_collection():
+    """Made for all documents, the tools list the collections, and list or search one the agent names."""
+    schema = {"object": "schema", "collection_id": None, "documents": 5, "keys": []}
+    seen = []
+
+    def handler(request):
+        if request.url.path.endswith("/schema"):
+            return httpx.Response(200, json=schema)
+        seen.append((request.url.path, dict(request.url.params), json.loads(request.content) if request.content else None))
+        if request.url.path == "/v1/collections":
+            return httpx.Response(200, json={"object": "list", "has_more": True, "total": 3, "data": [
+                {"object": "collection", "id": "col_1", "name": "filings", "documents": 40},
+                {"object": "collection", "id": "col_2", "name": "contracts", "documents": 12}]})
+        if request.url.path == "/v1/documents":
+            return httpx.Response(200, json={"object": "list", "has_more": False, "total": 0, "data": []})
+        return httpx.Response(200, json={"object": "document_search", "id": "s", "results": [
+            {"question": "q", "documents": [], "more_documents": []}], "failed_documents": [], "processing_documents": []})
+
+    tools = client(handler).tools()
+    out = json.loads(tools.run("list_collections", {"limit": 2}).text)
+    assert out["collections"] == [{"collection_id": "col_1", "name": "filings", "documents": 40},
+                                  {"collection_id": "col_2", "name": "contracts", "documents": 12}]
+    assert out["total"] == 3 and out["more"] == "Collections 1 to 2 of 3. Next page: offset 2."
+    tools.run("list_documents", {"collection_id": "col_2"})
+    assert seen[-1][1]["collection_id"] == "col_2"
+    tools.run("search_documents", {"question": "q", "collection_id": "col_2"})
+    assert seen[-1][2]["collection_id"] == "col_2"
+    assert "error" in json.loads(tools.run("list_collections", {"limit": 0}).text)
