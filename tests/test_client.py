@@ -355,3 +355,34 @@ def test_tools_ask_several_questions_at_once():
     out = json.loads(tools.run("search_pages", {"questions": ["revenue", "CEO"], "document_id": "doc_1"}).text)
     assert sent[-1]["questions"] == ["revenue", "CEO"]
     assert [(r["question"], r["pages"][0]["page"]) for r in out["results"]] == [("revenue", 1), ("CEO", 2)]
+
+
+def test_mcp_server():
+    mcp = pytest.importorskip("mcp")
+    schema = {"object": "schema", "collection_id": "col_1", "documents": 1, "keys": []}
+
+    def handler(request):
+        if request.url.path.endswith("/schema"):
+            return httpx.Response(200, json=schema)
+        if request.url.path.endswith("/image"):
+            return httpx.Response(200, content=b"\x89PNG")
+        if request.url.params.get("pages") == "99":
+            return httpx.Response(422, json={"error": {"code": "invalid_request", "message": "There is no page 99."}})
+        return httpx.Response(200, json={"object": "list", "document_id": "doc_1", "data": [
+            {"object": "page", "page": 7, "read": "image", "text": ""}]})
+
+    async def session():
+        async with mcp.Client(client(handler).tools(collection="col_1").mcp()) as c:
+            listed = (await c.list_tools()).tools
+            read = await c.call_tool("read_pages", {"document_id": "doc_1", "pages": [7]})
+            failed = await c.call_tool("read_pages", {"document_id": "doc_1", "pages": [99]})
+            return listed, read, failed
+
+    import anyio
+    listed, read, failed = anyio.run(session)
+    assert [t.name for t in listed] == ["list_documents", "search_documents", "search_pages", "read_pages",
+                                        "view_pages", "zoom_page"]
+    assert listed[3].input_schema["required"] == ["document_id", "pages"] and listed[3].annotations.read_only_hint
+    assert not read.is_error and json.loads(read.content[0].text)["pages"][0]["page"] == 7
+    assert read.content[1].text == "Page 7 of doc_1:" and read.content[2].mime_type == "image/png"
+    assert failed.is_error and json.loads(failed.content[0].text) == {"error": "There is no page 99."}

@@ -111,6 +111,25 @@ agent = Agent(name="Reports", instructions="Answer from the documents.", tools=t
 print(Runner.run_sync(agent, "What was capital expenditure in 2018?").final_output)
 ```
 
+### MCP
+
+The same tools work in Claude Desktop, Cursor and other MCP clients. Add this to the client's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "page-search": {
+      "command": "uvx",
+      "args": ["--from", "pageindex-search[mcp]", "pageindex-search-mcp", "--collection", "col_..."],
+      "env": {"PAGEINDEX_SEARCH_API_KEY": "pis_live_..."}
+    }
+  }
+}
+```
+
+Leave out `--collection` for all your documents, or pass `--filter '{"year": 2024}'` for those whose metadata meets it.
+In Python, `tools.mcp()` gives the server to run yourself.
+
 ## Reference
 
 | | |
@@ -122,7 +141,7 @@ print(Runner.run_sync(agent, "What was capital expenditure in 2018?").final_outp
 | `documents.list(limit=20, offset=0, collection=None, filter=None)` | Your documents, newest first, or a collection's, or those whose metadata meets `filter`: `limit` of them after the first `offset`. Loop over it for every document; `.data`, `.has_more` and `.total` (how many in all) are one page. |
 | `documents.get(id)`, `documents.delete(document)` | One document; delete one. |
 | `documents.pages(document, pages)`, `documents.page_image(document, page, box=None)` | The text of up to 20 pages, each with how it is best read; a page as PNG bytes, or with `box` (x0, y0, x1, y1 as fractions of the page from its top left) part of it, sharper. |
-| `tools(collection=None, filter=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, `.openai_agents()` (OpenAI Agents SDK), and `.run(name, input)`. |
+| `tools(collection=None, filter=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, `.openai_agents()` (OpenAI Agents SDK), `.mcp()` (an MCP server), and `.run(name, input)`. |
 | `documents.update(document, metadata=)` | Set metadata keys; `None` removes one. |
 | `collections.schema(collection)`, `documents.schema(collection=None, filter=None)` | The metadata keys the documents have: each key's types, how many documents have it, its least and greatest numbers and commonest strings. Counted as they are now; nothing is enforced. |
 | `collections.create(name)`, `.list()`, `.get(id)`, `.rename(collection, name)`, `.delete(collection)` | Named groups of your documents. Deleting one leaves its documents. |

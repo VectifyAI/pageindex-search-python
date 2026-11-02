@@ -121,6 +121,11 @@ class ToolResult:
                                                         "data": image.base64}})
         return content
 
+    def mcp(self) -> list[Any]:
+        """The CallToolResult content for MCP: the text, then each picture after its page number. Needs mcp."""
+        from ._mcp import content
+        return content(self)
+
 
 class Tools:
     """list_documents, search_documents, search_pages, read_pages, view_pages and zoom_page over a scope: a collection, documents whose
@@ -170,6 +175,12 @@ class Tools:
                                 strict_json_schema=False)
 
         return [tool(d) for d in self.definitions]
+
+    def mcp(self, name: str = "page-search") -> Any:
+        """The tools as an MCP server (mcp's low-level Server), to run over stdio or serve over HTTP. Needs mcp
+        (pip install "pageindex-search[mcp]"); pageindex-search-mcp runs one over stdio."""
+        from ._mcp import server
+        return server(self, name=name)
 
     def _list_documents(self) -> dict[str, Any]:
         return {
