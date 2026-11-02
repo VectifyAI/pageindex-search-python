@@ -210,7 +210,9 @@ class Tools:
             "name": "search_documents",
             "description": (
                 f"Find which of {self.schema.documents} documents likely answer each question, most relevant first, "
-                "with each one's relevance (0 to 1), page count and metadata; always at least one. Priced by the "
+                "with each one's relevance (0 to 1), page count and metadata. When none is likely to answer, it "
+                "lists none: the documents most likely do not answer the question; more_documents lists the next "
+                "most relevant, with their relevance, to search only if one plausibly does. Priced by the "
                 "documents it looks at: when a metadata filter alone picks the documents, use list_documents, which "
                 "is free, and when it narrows them, pass it here. Then call search_pages with the documents worth "
                 "reading. Searching a document's pages is priced by its pages, so search the most relevant documents "
@@ -234,7 +236,9 @@ class Tools:
             "name": "search_pages",
             "description": (
                 "Find the pages of one document that help answer each question, most relevant first, each with its "
-                "relevance (0 to 1) and text. Pages are numbered from 1. It is priced by the document's "
+                "relevance (0 to 1) and text. It finds pages by what they say and cannot tell where a page is, so "
+                "for questions about order or position (the first figure, page 5, the last section), read the pages "
+                "in order with read_pages instead. Pages are numbered from 1. It is priced by the document's "
                 "pages: search the documents search_documents ranks most relevant first, calling it for each at the "
                 "same time, and others only when needed; to ask again in other words, ask only "
                 "of the documents still missing the answer. A page whose read is "
@@ -260,8 +264,10 @@ class Tools:
             "name": "read_pages",
             "description": (
                 "Read pages of a document, numbered from 1: their text, with a picture of any page whose read is "
-                "\"image\" (a scan or a chart, whose text may be incomplete). Use it for pages search_pages found "
-                "that are pictures, or for the pages around one, such as where a table goes on. At most "
+                "\"image\" (a scan or a chart, whose text may be incomplete). Free. It reads pages in order: use it, "
+                "not search_pages, for questions about order or position; each page's read shows which are pictures, "
+                "such as charts. Use it too for pages search_pages found that are pictures, or for the pages around "
+                "one, such as where a table goes on. At most "
                 f"{MAX_PAGES_READ} pages at a time, and at most {MAX_IMAGES} of them pictures: in a scanned document "
                 f"every page is a picture, so read {MAX_IMAGES} at a time. If a picture's small print or figures are hard "
                 "to read, zoom in with zoom_page."
@@ -282,8 +288,9 @@ class Tools:
             "name": "view_pages",
             "description": (
                 f"See pages of a document as pictures, with their text: up to {MAX_IMAGES} at a time, numbered from "
-                "1. Use it where how a page looks matters, such as a table's layout or a chart on a page of text. If "
-                "small print or figures are hard to read, zoom in with zoom_page before answering."
+                "1. Use it where how a page looks matters, such as a table's layout or a chart on a page of text. "
+                "Free, but pictures cost the model many tokens: look only at the pages you need. If small print or "
+                "figures are hard to read, zoom in with zoom_page before answering."
             ),
             "input_schema": {
                 "type": "object",
@@ -363,9 +370,10 @@ class Tools:
         scope = self._scope(filter)
         found = self._client.documents.search(_asked(questions), collection=self._collection, filter=scope,
                                               top_k=_auto(top_k))
-        return {"results": [{"question": a.question,
-                             "documents": [{"document_id": d.document_id, "filename": d.filename, "pages": d.pages,
-                                            "relevance": d.relevance, "metadata": d.metadata} for d in a.documents]}
+        doc = lambda d: {"document_id": d.document_id, "filename": d.filename, "pages": d.pages,
+                         "relevance": d.relevance, "metadata": d.metadata}
+        return {"results": [{"question": a.question, "documents": [doc(d) for d in a.documents],
+                             **({"more_documents": [doc(d) for d in a.more_documents]} if a.more_documents else {})}
                             for a in found.results], **_cost(found.usage)}
 
     def _scope(self, filter: dict[str, Any] | None) -> dict[str, Any] | None:

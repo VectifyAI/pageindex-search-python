@@ -149,7 +149,9 @@ class DocumentMatch:
 @dataclass
 class DocumentAnswer:
     question: str
-    documents: list[DocumentMatch]  # most relevant first
+    documents: list[DocumentMatch]  # most relevant first; without top_k, those likely to help, which may be none
+    # Without top_k, the next most relevant, for when those listed do not answer or none is
+    more_documents: list[DocumentMatch] = field(default_factory=list)
 
 
 @dataclass
@@ -173,7 +175,8 @@ class DocumentSearchResult:
     @classmethod
     def _from(cls, data: dict[str, Any]) -> "DocumentSearchResult":
         out = _make(cls, data)
-        out.results = [DocumentAnswer(a["question"], [_make(DocumentMatch, d) for d in a["documents"]])
+        out.results = [DocumentAnswer(a["question"], [_make(DocumentMatch, d) for d in a["documents"]],
+                                      [_make(DocumentMatch, d) for d in a.get("more_documents", [])])
                        for a in data["results"]]
         out.usage = _make(DocumentSearchUsage, data["usage"]) if data.get("usage") else None
         return out

@@ -106,6 +106,7 @@ def test_document_search():
                                            "top_k": 1}
     assert result.results[0].documents[0].document_id == "doc_2" and result.results[0].documents[0].pages == 40
     assert result.processing_documents == ["doc_3"] and result.usage.billable_documents == 2
+    assert result.results[0].more_documents == []  # with top_k, none
 
 
 def test_collections():
@@ -221,7 +222,8 @@ def test_tools():
         {"key": "ticker", "types": ["string"], "documents": 3, "values": [{"value": "MMM", "documents": 2}]},
         {"key": "year", "types": ["number"], "documents": 3, "min": 2018, "max": 2024, "values": []}]}
     found = {"object": "document_search", "id": "dsrch_1", "results": [{"question": "q", "documents": [
-        {"document_id": "doc_1", "relevance": 0.9, "filename": "a.pdf", "pages": 10, "metadata": {"year": 2018}}]}],
+        {"document_id": "doc_1", "relevance": 0.9, "filename": "a.pdf", "pages": 10, "metadata": {"year": 2018}}],
+        "more_documents": [{"document_id": "doc_2", "relevance": 0.1, "filename": "b.pdf", "pages": 4, "metadata": {}}]}],
         "failed_documents": [], "processing_documents": []}
     pages = {"object": "search", "id": "srch_1", "results": [{"question": "q", "documents": [
         {"document_id": "doc_1", "filename": "a.pdf", "pages": [{"page": 4, "relevance": 1.0, "read": "image",
@@ -280,6 +282,8 @@ def test_tools():
 
     out = json.loads(tools.run_text("search_documents", {"questions": ["q"], "filter": {"year": 2018}}))
     assert out["results"][0]["documents"][0]["document_id"] == "doc_1" and "cost_usd" not in out  # none given
+    assert out["results"][0]["more_documents"] == [{"document_id": "doc_2", "filename": "b.pdf", "pages": 4,
+                                                    "relevance": 0.1, "metadata": {}}]
     assert sent[-1] == ("/v1/documents/search", {"questions": ["q"], "collection_id": "col_1",
                                                  "filter": {"$and": [{"audited": True}, {"year": 2018}]}})
     assert json.loads(tools.run_text("search_documents", {"question": "q", "filter": {"bad": 1}})) == \
