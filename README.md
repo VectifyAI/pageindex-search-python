@@ -131,6 +131,19 @@ The same tools work in Claude Desktop, Cursor and other MCP clients. Add this to
 Leave out `--collection` for all your documents, or pass `--filter '{"year": 2024}'` for those whose metadata meets it.
 In Python, `tools.mcp()` gives the server to run yourself.
 
+### Show where the answer is
+
+Add `CITATIONS` to the agent's instructions, and it cites each sentence with `<cite doc="report.pdf" page="12"/>`,
+with `box="x0,y0,x1,y1"` for the part of the page it came from. `client.citations(answer)` finds them:
+
+```python
+from pageindex_search import CITATIONS
+
+instructions = "Answer only from the documents. " + CITATIONS
+for c in client.citations(answer):
+    png = client.documents.page_image(c.document_id, c.page, box=c.box)  # the page, or that part of it
+```
+
 ## Reference
 
 | | |

@@ -534,6 +534,24 @@ class PageSearch:
         from ._tools import Tools
         return Tools(self, collection=collection, filter=filter)
 
+    def citations(self, text: str) -> list["Citation"]:
+        """The citations in an agent's answer, written as CITATIONS asks, each with the document_id of the document it
+        names: found among your documents by file name, the newest when several share it. Then show the page, or the
+        part of it named, with documents.page_image(c.document_id, c.page, box=c.box)."""
+        from ._citations import citations
+        found = citations(text)
+        names, ids, offset = {c.document for c in found}, {}, 0
+        while names - ids.keys():
+            page = self.documents.list(limit=100, offset=offset)
+            for doc in page.data:
+                ids.setdefault(doc.filename, doc.id)
+            if not page.has_more:
+                break
+            offset += 100
+        for c in found:
+            c.document_id = ids.get(c.document)
+        return found
+
     # Account
 
     def usage(self, *, start: str | None = None, end: str | None = None) -> dict[str, Any]:
