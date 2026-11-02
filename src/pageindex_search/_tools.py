@@ -366,7 +366,7 @@ class Tools:
         return {"results": [{"question": a.question,
                              "documents": [{"document_id": d.document_id, "filename": d.filename, "pages": d.pages,
                                             "relevance": d.relevance, "metadata": d.metadata} for d in a.documents]}
-                            for a in found.results]}
+                            for a in found.results], **_cost(found.usage)}
 
     def _scope(self, filter: dict[str, Any] | None) -> dict[str, Any] | None:
         """The filter the agent gave, within the one the tools were made with."""
@@ -384,7 +384,7 @@ class Tools:
             if d.more_pages:
                 out["more_pages"] = [{"page": p.page, "relevance": p.relevance, "read": p.read} for p in d.more_pages]
             results.append(out)
-        return {"document_id": first.document_id, "filename": first.filename, "results": results}
+        return {"document_id": first.document_id, "filename": first.filename, "results": results, **_cost(found.usage)}
 
     def read_pages(self, document_id: str, pages: list[int]) -> ToolResult:
         return self._pages(document_id, pages, MAX_PAGES_READ, lambda p: p.read == "image")
@@ -417,6 +417,11 @@ class Tools:
                           **({"note": SEE_PICTURE} if p.read == "image" else {})}
                          for p in texts]}
         return ToolResult(_text(out), [PageImage(document_id, page, png) for page, png in zip(pictured, pngs)])
+
+
+def _cost(usage: Any) -> dict[str, Any]:
+    """What a search cost, in US dollars, for the output: priced searches say so."""
+    return {"cost_usd": usage.cost_usd} if usage is not None else {}
 
 
 def _text(out: dict[str, Any]) -> str:

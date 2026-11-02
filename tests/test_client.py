@@ -227,7 +227,8 @@ def test_tools():
         {"document_id": "doc_1", "filename": "a.pdf", "pages": [{"page": 4, "relevance": 1.0, "read": "image",
                                                                   "text": "Chart"}],
          "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}]}],
-        "failed_documents": [], "processing_documents": []}
+        "failed_documents": [], "processing_documents": [],
+        "usage": {"documents": 0, "pages": 10, "questions": 1, "cost_usd": 0.001, "balance_usd": 4.5}}
     sent = []
     images = []  # each picture asked for: its box, or None
     listed = []  # each list of documents asked for: its query
@@ -278,7 +279,7 @@ def test_tools():
     assert "error" in json.loads(tools.run_text("list_documents", {"limit": 500}))
 
     out = json.loads(tools.run_text("search_documents", {"questions": ["q"], "filter": {"year": 2018}}))
-    assert out["results"][0]["documents"][0]["document_id"] == "doc_1"
+    assert out["results"][0]["documents"][0]["document_id"] == "doc_1" and "cost_usd" not in out  # none given
     assert sent[-1] == ("/v1/documents/search", {"questions": ["q"], "collection_id": "col_1",
                                                  "filter": {"$and": [{"audited": True}, {"year": 2018}]}})
     assert json.loads(tools.run_text("search_documents", {"question": "q", "filter": {"bad": 1}})) == \
@@ -287,7 +288,7 @@ def test_tools():
     out = json.loads(tools.run_text("search_pages", {"question": "q", "document_id": "doc_1", "top_k": "auto"}))
     assert out == {"document_id": "doc_1", "filename": "a.pdf", "results": [{"question": "q",
                    "pages": [{"page": 4, "relevance": 1.0, "read": "image", "text": "Chart", "note": PICTURED}],
-                   "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}]}
+                   "more_pages": [{"page": 5, "relevance": 0.2, "read": "text"}]}], "cost_usd": 0.001}
     assert sent[-1] == ("/v1/search", {"questions": ["q"], "document_id": "doc_1", "include_text": True})
     tools.run("search_pages", {"question": "q", "document_id": "doc_1", "top_k": 3})
     assert sent[-1][1]["top_k"] == 3
