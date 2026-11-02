@@ -59,8 +59,9 @@ class Document:
     bytes: int | None = None
     created_at: str | None = None
     error: str | None = None
-    duplicate: bool = False  # the same file was already uploaded; this is that document
+    duplicate: bool = False  # the same file was already uploaded, to the same collection; this is that document
     metadata: dict[str, Any] = field(default_factory=dict)  # your own keys: strings, numbers and booleans
+    collection_id: str | None = None  # the collection it is in: at most one
 
 
 @dataclass
@@ -421,16 +422,18 @@ class Collections:
         return Schema._from(self._client._request("GET", f"/collections/{_id(collection)}/schema"))
 
     def delete(self, collection: Collection | str) -> None:
-        """Delete the collection; its documents stay."""
+        """Delete the collection and its documents, as a folder with its files. Move any to keep out of it first."""
         self._client._request("DELETE", f"/collections/{_id(collection)}")
 
     def add(self, collection: Collection | str, documents: Sequence[Document | str]) -> Collection:
-        """Put documents in the collection (up to 1,000 at once); those already in it stay."""
+        """Move documents into the collection (up to 1,000 at once), from whichever they are in: a document is in at
+        most one. None moves when one is the same file as a document already there (PageSearchError,
+        document_exists)."""
         return _make(Collection, self._client._request("POST", f"/collections/{_id(collection)}/documents",
                                                        json={"document_ids": [_id(d) for d in documents]}))
 
     def remove(self, collection: Collection | str, document: Document | str) -> Collection:
-        """Take a document out of the collection; the document stays."""
+        """Move a document out of the collection, into none; the document stays."""
         return _make(Collection, self._client._request(
             "DELETE", f"/collections/{_id(collection)}/documents/{_id(document)}"))
 
