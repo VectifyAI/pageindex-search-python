@@ -535,7 +535,7 @@ class PageSearch:
         return Tools(self, collection=collection, filter=filter)
 
     def citations(self, text: str) -> list["Citation"]:
-        """The citations in an agent's answer, written as CITATIONS asks, each with the document_id of the document it
+        """The citations in an agent's answer, written as CITATIONS (or CITATIONS_WITH_BOXES) asks, each with the document_id of the document it
         names: found among your documents by file name, the newest when several share it. Then show the page, or the
         part of it named, with documents.page_image(c.document_id, c.page, box=c.box)."""
         from ._citations import citations

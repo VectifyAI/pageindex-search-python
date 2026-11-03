@@ -1,8 +1,9 @@
 """Citations as an agent with these tools writes them, as PageIndex's chat does: a tag after each sentence,
-<cite doc="report.pdf" page="12"/>, and, when the fact comes from a part of the page, box="x0,y0,x1,y1" (fractions of the
-page's width and height from its top left, as zoom_page takes them), to show where the answer is.
+<cite doc="report.pdf" page="12"/>, and, asked for with CITATIONS_WITH_BOXES, the part of the page the answer is in,
+box="x0,y0,x1,y1" (fractions of the page's width and height from its top left, as zoom_page takes them), to show where
+it is. For that the agent looks at each page it cites: a few seconds more, and a picture's tokens.
 
-    instructions = "Answer from the documents. " + CITATIONS
+    instructions = "Answer from the documents. " + CITATIONS_WITH_BOXES
     for c in citations(answer): c.document, c.page, c.box
 """
 from __future__ import annotations
@@ -11,9 +12,10 @@ import re
 from dataclasses import dataclass
 
 CITATIONS = ("After each sentence drawn from the documents, cite where, with a tag for each page: "
-             '<cite doc="file name" page="12"/>, the file name as the tools give it. When it comes from a part of the '
-             'page, such as a table, a chart or a paragraph you zoomed into, add that part as box="x0,y0,x1,y1", fractions '
-             "of the page's width and height from its top left, as zoom_page takes them.")
+             '<cite doc="file name" page="12"/>, the file name as the tools give it.')
+CITATIONS_WITH_BOXES = (CITATIONS + ' Add to each the part of the page the answer is in as box="x0,y0,x1,y1", fractions '
+                        "of the page's width and height from its top left, as zoom_page takes them: before you cite a "
+                        "page whose picture you have not seen, look at it with view_pages.")
 
 # Taken as models vary the tag: in single quotes or none, in capitals, closed or not, a range or a list of pages, or
 # in backticks.

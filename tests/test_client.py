@@ -434,7 +434,7 @@ def test_tools_choose_a_collection():
 
 
 def test_citations():
-    from pageindex_search import CITATIONS, citations
+    from pageindex_search import CITATIONS, CITATIONS_WITH_BOXES, citations
     answer = ('Revenue was $215.9 billion. <cite doc="NVDA_2026_10K.pdf" page="51"/> The table shows it by segment. '
               "<cite doc='NVDA_2026_10K.pdf' page='77' box='0.1,0.2,0.9,0.5'/> Both years: `<cite doc=a.pdf pages=3-4 />` "
               '<CITE DOC="b.pdf" PAGE="7, 9"></CITE> <cite doc="b.pdf" page="2" box="0.5,0.5,0.2,0.9"/>')
@@ -444,7 +444,8 @@ def test_citations():
         ("a.pdf", 4, None), ("b.pdf", 7, None), ("b.pdf", 9, None), ("b.pdf", 2, None)]  # the last box is not a box
     assert answer[found[0].start:found[0].end] == '<cite doc="NVDA_2026_10K.pdf" page="51"/>'
     assert answer[found[2].start:found[2].end] == "`<cite doc=a.pdf pages=3-4 />`"
-    assert citations("No citation here.") == [] and "<cite" in CITATIONS and "box=" in CITATIONS
+    assert citations("No citation here.") == [] and "<cite" in CITATIONS and "box=" not in CITATIONS
+    assert CITATIONS_WITH_BOXES.startswith(CITATIONS) and "box=" in CITATIONS_WITH_BOXES and "view_pages" in CITATIONS_WITH_BOXES
 
 
 def test_client_citations_finds_documents():

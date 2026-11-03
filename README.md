@@ -133,13 +133,14 @@ In Python, `tools.mcp()` gives the server to run yourself.
 
 ### Show where the answer is
 
-Add `CITATIONS` to the agent's instructions, and it cites each sentence with `<cite doc="report.pdf" page="12"/>`,
-with `box="x0,y0,x1,y1"` for the part of the page it came from. `client.citations(answer)` finds them:
+Add `CITATIONS` to the agent's instructions, and it cites each sentence with `<cite doc="report.pdf" page="12"/>`;
+with `CITATIONS_WITH_BOXES`, also `box="x0,y0,x1,y1"`, the part of the page the answer is in (the agent looks at each
+page it cites, for a few seconds more). `client.citations(answer)` finds them:
 
 ```python
-from pageindex_search import CITATIONS
+from pageindex_search import CITATIONS_WITH_BOXES
 
-instructions = "Answer only from the documents. " + CITATIONS
+instructions = "Answer only from the documents. " + CITATIONS_WITH_BOXES
 for c in client.citations(answer):
     png = client.documents.page_image(c.document_id, c.page, box=c.box)  # the page, or that part of it
 ```

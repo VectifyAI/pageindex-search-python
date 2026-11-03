@@ -5,11 +5,11 @@ from ._client import (
     Documents, DocumentSearchResult, DocumentSearchUsage, Page, PageSearch, PageSearchError, PageText, Schema, SchemaKey,
     SearchResult, SearchUsage,
 )
-from ._citations import CITATIONS, Citation, citations
+from ._citations import CITATIONS, CITATIONS_WITH_BOXES, Citation, citations
 from ._tools import PageImage, ToolResult, Tools
 from ._version import __version__
 
 __all__ = ["PageSearch", "PageSearchError", "Document", "DocumentPage", "Documents", "SearchResult", "Answer", "Page",
            "SearchUsage", "FoundDocument", "Collection", "CollectionPage", "Collections", "DocumentSearchResult", "DocumentAnswer",
            "DocumentMatch", "DocumentSearchUsage", "Schema", "SchemaKey", "PageText", "Tools", "ToolResult", "PageImage",
-           "CITATIONS", "Citation", "citations", "__version__"]
+           "CITATIONS", "CITATIONS_WITH_BOXES", "Citation", "citations", "__version__"]
