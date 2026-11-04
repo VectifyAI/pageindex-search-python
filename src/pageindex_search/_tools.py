@@ -278,6 +278,11 @@ class Tools:
                     "questions": QUESTIONS,
                     "document_id": {"type": "string", "description": "The document to search, from search_documents."},
                     "top_k": _top_k("pages"),
+                    "start_page": {"type": "integer", "minimum": 1,
+                                   "description": "Search from this page (from 1); without it, from the first."},
+                    "end_page": {"type": "integer", "minimum": 1,
+                                 "description": "Search to this page, included; without it, to the last. A part of "
+                                                "the document costs only its pages."},
                 },
                 "required": ["questions", "document_id"],
             },
@@ -423,8 +428,10 @@ class Tools:
         """The filter the agent gave, within the one the tools were made with."""
         return self._filter if filter is None else filter if self._filter is None else {"$and": [self._filter, filter]}
 
-    def search_pages(self, questions: list[str] | str, document_id: str, top_k: int | str | None = None) -> dict[str, Any]:
-        found = self._client.search(_asked(questions), document=document_id, top_k=_auto(top_k), include_text=True)
+    def search_pages(self, questions: list[str] | str, document_id: str, top_k: int | str | None = None,
+                     start_page: int | None = None, end_page: int | None = None) -> dict[str, Any]:
+        found = self._client.search(_asked(questions), document=document_id, top_k=_auto(top_k), include_text=True,
+                                    start_page=start_page, end_page=end_page)
         first = found.results[0].documents[0]
         results = []
         for a in found.results:

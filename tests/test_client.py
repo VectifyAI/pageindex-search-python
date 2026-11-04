@@ -299,6 +299,12 @@ def test_tools():
     assert json.loads(tools.run_text("search_documents", {"question": "q", "filter": {"bad": 1}})) == \
         {"error": "No such condition."}
 
+    # A search of a part of a document sends its pages.
+    tools.run("search_pages", {"questions": ["q"], "document_id": "doc_1", "start_page": 3, "end_page": 8})
+    assert sent[-1][1]["start_page"] == 3 and sent[-1][1]["end_page"] == 8 and sent[-1][1]["document_id"] == "doc_1"
+    tools.run("search_pages", {"questions": ["q"], "document_id": "doc_1"})
+    assert "start_page" not in sent[-1][1] and "end_page" not in sent[-1][1]
+
     out = json.loads(tools.run_text("search_pages", {"question": "q", "document_id": "doc_1", "top_k": "auto"}))
     assert out == {"document_id": "doc_1", "filename": "a.pdf", "results": [{"question": "q",
                    "pages": [{"page": 4, "relevance": 1.0, "read": "image", "text": "Chart", "note": PICTURED}],
@@ -464,3 +470,26 @@ def test_client_citations_finds_documents():
     found = client(handler).citations('<cite doc="a.pdf" page="1"/> <cite doc="c.pdf" page="2"/> <cite doc="x.pdf" page="3"/>')
     assert [(c.document, c.document_id) for c in found] == [("a.pdf", "doc_new"), ("c.pdf", "doc_c"), ("x.pdf", None)]
     assert listed == [0, 100]  # the newest of two named alike; paged until all are found or none are left
+
+
+def test_page_ranges_and_bookmarks():
+    asked = []
+
+    def handler(request):
+        asked.append((request.url.path, dict(request.url.params)))
+        if request.url.path.endswith("/bookmarks"):
+            return httpx.Response(200, json={"object": "list", "document_id": "doc_1", "data": [
+                {"title": "1 Revenue", "level": 1, "page": 1}, {"title": "1.1 By segment", "level": 2, "page": 3}]})
+        return httpx.Response(200, json={"object": "list", "document_id": "doc_1", "data": [
+            {"object": "page", "page": 2, "read": "text", "text": "Two"}]})
+
+    c = client(handler)
+    assert [p.page for p in c.documents.pages("doc_1", start=2, end=40)] == [2]
+    assert asked[-1] == ("/v1/documents/doc_1/pages", {"start": "2", "end": "40"})
+    c.documents.pages("doc_1", [9, 4], start=1, end=3)
+    assert asked[-1][1] == {"pages": "9,4", "start": "1", "end": "3"}
+    c.documents.pages("doc_1", [4])
+    assert asked[-1][1] == {"pages": "4"}
+    marks = c.documents.bookmarks("doc_1")
+    assert asked[-1][0] == "/v1/documents/doc_1/bookmarks"
+    assert [(b.title, b.level, b.page) for b in marks] == [("1 Revenue", 1, 1), ("1.1 By segment", 2, 3)]

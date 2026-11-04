@@ -191,6 +191,13 @@ class PageText:
 
 
 @dataclass
+class Bookmark:
+    title: str
+    level: int  # 1 for the top
+    page: int  # the page it goes to, numbered from 1
+
+
+@dataclass
 class SchemaKey:
     key: str
     types: list[str]  # "string", "number", "boolean": more than one when documents disagree
@@ -344,11 +351,25 @@ class Documents:
             params["filter"] = json.dumps(filter)
         return Schema._from(self._client._request("GET", "/documents/schema", params=params))
 
-    def pages(self, document: Document | str, pages: Sequence[int]) -> builtins.list[PageText]:
-        """The text of up to 20 pages, numbered from 1, in the order named."""
-        data = self._client._request("GET", f"/documents/{_id(document)}/pages",
-                                     params={"pages": ",".join(str(p) for p in pages)})
+    def pages(self, document: Document | str, pages: Sequence[int] | None = None, *, start: int | None = None,
+              end: int | None = None) -> builtins.list[PageText]:
+        """The text of up to 50 pages, numbered from 1: those from start to end, included (an end past the last page
+        stops at it), then those named in pages, in the order named; each once."""
+        params: dict[str, Any] = {}
+        if pages is not None:
+            params["pages"] = ",".join(str(p) for p in pages)
+        if start is not None:
+            params["start"] = start
+        if end is not None:
+            params["end"] = end
+        data = self._client._request("GET", f"/documents/{_id(document)}/pages", params=params)
         return [_make(PageText, p) for p in data["data"]]
+
+    def bookmarks(self, document: Document | str) -> builtins.list[Bookmark]:
+        """The PDF's own bookmarks, in their order: each with its title, its level (from 1) and the page it goes to
+        (from 1). None, if the PDF has none."""
+        data = self._client._request("GET", f"/documents/{_id(document)}/bookmarks")
+        return [_make(Bookmark, b) for b in data["data"]]
 
     def page_image(self, document: Document | str, page: int, box: Sequence[float] | None = None) -> bytes:
         """The page as PNG bytes, no side past 1568 pixels. With box, (x0, y0, x1, y1) as fractions of the page's
@@ -493,6 +514,7 @@ class PageSearch:
                documents: Sequence[Document | str] | None = None, collection: Collection | str | None = None,
                filter: dict[str, Any] | None = None, max_documents: int | None = None,
                document_top_k: int | None = None, top_k: int | None = None, include_text: bool = False,
+               start_page: int | None = None, end_page: int | None = None,
                idempotency_key: str | None = None) -> SearchResult:
         """Ask up to 10 questions. For each, the pages that help answer it, under the documents they are in.
 
@@ -502,7 +524,8 @@ class PageSearch:
 
         Across documents, the most relevant documents for each question are found first and only their pages
         searched: those likely to answer, at most max_documents (default 3), or exactly document_top_k. Without top_k, each document lists the pages likely to help,
-        possibly none; with it, exactly top_k. include_text lists each page with its text. Retries send the same idempotency_key (a new one by default), so a
+        possibly none; with it, exactly top_k. include_text lists each page with its text. With one document,
+        start_page and end_page (from 1, included) search only those pages, and are charged only for them. Retries send the same idempotency_key (a new one by default), so a
         search retried after a timeout is not run or charged twice; pass your own to make your own retries safe too.
         """
         if before_0_4 or isinstance(questions, Document):
@@ -524,6 +547,10 @@ class PageSearch:
             body["top_k"] = top_k
         if include_text:
             body["include_text"] = True
+        if start_page is not None:
+            body["start_page"] = start_page
+        if end_page is not None:
+            body["end_page"] = end_page
         headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
         return SearchResult._from(self._request("POST", "/search", json=body, headers=headers))
 
