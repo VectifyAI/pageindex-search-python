@@ -2,7 +2,7 @@
 
 from ._client import (
     Answer, Bookmark, Collection, FoundDocument, CollectionPage, Collections, Document, DocumentAnswer, DocumentMatch, DocumentPage,
-    Documents, DocumentSearchResult, DocumentSearchUsage, Heading, Outline, Outlines, Page, PageSearch, PageSearchError,
+    Documents, DocumentSearchResult, DocumentSearchUsage, Outline, OutlinePage, Outlines, Page, PageSearch, PageSearchError,
     PageText, Schema, SchemaKey, SearchResult, SearchUsage,
 )
 from ._citations import CITATIONS, CITATIONS_WITH_BOXES, Citation, citations
@@ -11,5 +11,5 @@ from ._version import __version__
 
 __all__ = ["PageSearch", "PageSearchError", "Document", "DocumentPage", "Documents", "SearchResult", "Answer", "Page",
            "SearchUsage", "FoundDocument", "Collection", "CollectionPage", "Collections", "DocumentSearchResult", "DocumentAnswer",
-           "DocumentMatch", "DocumentSearchUsage", "Schema", "SchemaKey", "PageText", "Bookmark", "Outline", "Outlines", "Heading", "Tools", "ToolResult", "PageImage",
+           "DocumentMatch", "DocumentSearchUsage", "Schema", "SchemaKey", "PageText", "Bookmark", "Outline", "Outlines", "OutlinePage", "Tools", "ToolResult", "PageImage",
            "CITATIONS", "CITATIONS_WITH_BOXES", "Citation", "citations", "__version__"]

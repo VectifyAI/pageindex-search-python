@@ -198,30 +198,27 @@ class Bookmark:
 
 
 @dataclass
-class Heading:
-    title: str  # as printed, numbering included
-    page: int  # the page it is on, numbered from 1
+class OutlinePage:
+    page: int  # numbered from 1
+    headings: list[str]  # as printed, numbering included, in order
 
 
 @dataclass
 class Outline:
-    """A document's outline: every heading in it and the page it is on. str() gives it one page a line,
-    "p.12 Outlook | Group financial targets", as an agent reads it."""
+    """A document's outline: its pages with headings, in order, each with its headings. str() gives it one page a
+    line, "p.12 Outlook | Group financial targets", as an agent reads it."""
     document_id: str
     status: str  # "ready"; "preparing" while it is made; "off" while it has none and its collection makes none;
     # "unpaid" when your credit did not cover it; "failed" when it could not be made (not charged)
-    headings: list[Heading]
+    pages: list[OutlinePage]
 
     def __str__(self) -> str:
-        pages: dict[int, list[str]] = {}
-        for h in self.headings:
-            pages.setdefault(h.page, []).append(h.title)
-        return "\n".join(f"p.{page} " + " | ".join(titles) for page, titles in sorted(pages.items()))
+        return "\n".join(f"p.{p.page} " + " | ".join(p.headings) for p in self.pages)
 
     @classmethod
     def _from(cls, data: dict[str, Any]) -> "Outline":
         return cls(document_id=data["document_id"], status=data["status"],
-                   headings=[_make(Heading, h) for h in data.get("data", [])])
+                   pages=[_make(OutlinePage, p) for p in data.get("data", [])])
 
 
 @dataclass

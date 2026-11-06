@@ -510,8 +510,8 @@ def test_outlines():
         asked.append((request.method, path, q or (json.loads(request.content) if request.content else None)))
         if path == "/v1/documents/doc_1/outline":
             return httpx.Response(200, json={"object": "outline", "document_id": "doc_1", "status": "ready", "data": [
-                {"title": "Outlook", "page": 12}, {"title": "Group financial targets", "page": 12},
-                {"title": "Who we are", "page": 13}]})
+                {"page": 12, "headings": ["Outlook", "Group financial targets"]},
+                {"page": 13, "headings": ["Who we are"]}]})
         if path == "/v1/documents/doc_2/outline":
             return httpx.Response(200, json={"object": "outline", "document_id": "doc_2", "status": "off", "data": []})
         if path == "/v1/documents/outlines" and request.method == "PUT":
@@ -528,7 +528,7 @@ def test_outlines():
     pages = client(handler)
     outline = pages.documents.outline("doc_1")
     assert str(outline) == "p.12 Outlook | Group financial targets\np.13 Who we are"
-    assert outline.status == "ready" and outline.headings[2].title == "Who we are"
+    assert outline.status == "ready" and outline.pages[1].headings == ["Who we are"]
     pages.documents.make_outline("doc_1")
     assert asked[-1][:2] == ("POST", "/v1/documents/doc_1/outline")
     turned = pages.collections.outlines("col_off", on=True)
