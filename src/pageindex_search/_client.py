@@ -198,6 +198,52 @@ class Bookmark:
 
 
 @dataclass
+class Heading:
+    title: str  # as printed, numbering included
+    page: int  # the page it is on, numbered from 1
+
+
+@dataclass
+class Outline:
+    """A document's outline: every heading in it and the page it is on. str() gives it one page a line,
+    "p.12 Outlook | Group financial targets", as an agent reads it."""
+    document_id: str
+    status: str  # "ready"; "preparing" while it is made; "off" while it has none and its collection makes none;
+    # "unpaid" when your credit did not cover it; "failed" when it could not be made (not charged)
+    headings: list[Heading]
+
+    def __str__(self) -> str:
+        pages: dict[int, list[str]] = {}
+        for h in self.headings:
+            pages.setdefault(h.page, []).append(h.title)
+        return "\n".join(f"p.{page} " + " | ".join(titles) for page, titles in sorted(pages.items()))
+
+    @classmethod
+    def _from(cls, data: dict[str, Any]) -> "Outline":
+        return cls(document_id=data["document_id"], status=data["status"],
+                   headings=[_make(Heading, h) for h in data.get("data", [])])
+
+
+@dataclass
+class Outlines:
+    """Outlines of a collection (whether it makes them), of a document, or of the account: how many documents have
+    theirs, and what making the rest costs."""
+    on: bool
+    documents: int  # ready documents
+    pages: int
+    ready: int  # documents whose outline is made
+    preparing: int
+    unpaid: int  # waiting for credit
+    failed: int
+    pages_left: int  # pages of the documents without one
+    cost_to_finish: float  # US dollars to make the rest
+    price_per_1000_pages: float
+    collection_id: str | None = None
+    document_id: str | None = None
+    collections: list[dict[str, Any]] | None = None  # the account's: those that make outlines
+
+
+@dataclass
 class SchemaKey:
     key: str
     types: list[str]  # "string", "number", "boolean": more than one when documents disagree
@@ -371,6 +417,16 @@ class Documents:
         data = self._client._request("GET", f"/documents/{_id(document)}/bookmarks")
         return [_make(Bookmark, b) for b in data["data"]]
 
+    def outline(self, document: Document | str) -> Outline:
+        """The document's outline: every heading in it and the page it is on; str() of it, one page a line. Made for
+        the documents of collections that make outlines (Collections.outlines), or by make_outline."""
+        return Outline._from(self._client._request("GET", f"/documents/{_id(document)}/outline"))
+
+    def make_outline(self, document: Document | str) -> Outline:
+        """Make the document's outline, whatever its collection, paid once by its pages as it is made: "preparing"
+        until it is. One made already is returned as it is."""
+        return Outline._from(self._client._request("POST", f"/documents/{_id(document)}/outline"))
+
     def page_image(self, document: Document | str, page: int, box: Sequence[float] | None = None) -> bytes:
         """The page as PNG bytes, no side past 1568 pixels. With box, (x0, y0, x1, y1) as fractions of the page's
         width and height from its top left, only that part of it, drawn sharper: to read small print."""
@@ -441,6 +497,16 @@ class Collections:
     def schema(self, collection: Collection | str) -> Schema:
         """The metadata keys of the collection's documents: see Documents.schema."""
         return Schema._from(self._client._request("GET", f"/collections/{_id(collection)}/schema"))
+
+    def outlines(self, collection: Collection | str, on: bool | None = None) -> Outlines:
+        """The collection's outlines: whether it makes them, how many of its documents have theirs, and what making the
+        rest costs. With on=True, turns them on: its documents get theirs, each paid once by its pages as it is made,
+        and so does each document added after; on=False turns them off, keeping those made."""
+        if on is None:
+            data = self._client._request("GET", "/documents/outlines", params={"collection_id": _id(collection)})
+        else:
+            data = self._client._request("PUT", "/documents/outlines", json={"on": on, "collection_id": _id(collection)})
+        return _make(Outlines, data)
 
     def delete(self, collection: Collection | str) -> None:
         """Delete the collection and its documents, as a folder with its files. Move any to keep out of it first."""
@@ -554,12 +620,15 @@ class PageSearch:
         headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
         return SearchResult._from(self._request("POST", "/search", json=body, headers=headers))
 
-    def tools(self, *, collection: Collection | str | None = None, filter: dict[str, Any] | None = None) -> "Tools":
+    def tools(self, *, collection: Collection | str | None = None, filter: dict[str, Any] | None = None,
+              outline: bool | None = None) -> "Tools":
         """list_documents, search_documents, search_pages, read_pages, view_pages and zoom_page, for an LLM agent to call, over a
         collection, documents whose metadata meets filter, or all of yours. Their descriptions hold the metadata schema, read now, so the agent can write
-        filters: pass tools.definitions (or tools.openai) to the model and tools.run(name, input) its tool calls."""
+        filters: pass tools.definitions (or tools.openai) to the model and tools.run(name, input) its tool calls.
+        get_document_outline too when there are outlines to read: the collection makes them, or (without one) some of
+        your documents have theirs; outline=True or False says so instead."""
         from ._tools import Tools
-        return Tools(self, collection=collection, filter=filter)
+        return Tools(self, collection=collection, filter=filter, outline=outline)
 
     def citations(self, text: str) -> list["Citation"]:
         """The citations in an agent's answer, written as CITATIONS (or CITATIONS_WITH_BOXES) asks, each with the document_id of the document it
@@ -580,6 +649,10 @@ class PageSearch:
         return found
 
     # Account
+
+    def outlines(self) -> Outlines:
+        """Your outlines: the collections that make them (collections), and how many documents have theirs."""
+        return _make(Outlines, self._request("GET", "/documents/outlines"))
 
     def usage(self, *, start: str | None = None, end: str | None = None) -> dict[str, Any]:
         """Uploads, searches and cost by day (UTC, dates as YYYY-MM-DD; the last 30 days by default), your

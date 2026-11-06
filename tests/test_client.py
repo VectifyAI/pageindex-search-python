@@ -493,3 +493,57 @@ def test_page_ranges_and_bookmarks():
     marks = c.documents.bookmarks("doc_1")
     assert asked[-1][0] == "/v1/documents/doc_1/bookmarks"
     assert [(b.title, b.level, b.page) for b in marks] == [("1 Revenue", 1, 1), ("1.1 By segment", 2, 3)]
+
+
+def test_outlines():
+    """Outlines one page a line; turned on a collection at a time; tools read them when there are some to read."""
+    asked = []
+    collection_on = {"col_on": True, "col_off": False}
+    summary = lambda on, ready, **scope: {"object": "outlines", **scope, "on": on, "documents": 2, "pages": 30,
+                                          "ready": ready, "preparing": 0, "unpaid": 0, "failed": 0,
+                                          "pages_left": 30 - 15 * ready, "price_per_1000_pages": 1.0,
+                                          "cost_to_finish": (30 - 15 * ready) / 1000}
+    schema = {"object": "schema", "collection_id": None, "documents": 0, "keys": []}
+
+    def handler(request):
+        path, q = request.url.path, dict(request.url.params)
+        asked.append((request.method, path, q or (json.loads(request.content) if request.content else None)))
+        if path == "/v1/documents/doc_1/outline":
+            return httpx.Response(200, json={"object": "outline", "document_id": "doc_1", "status": "ready", "data": [
+                {"title": "Outlook", "page": 12}, {"title": "Group financial targets", "page": 12},
+                {"title": "Who we are", "page": 13}]})
+        if path == "/v1/documents/doc_2/outline":
+            return httpx.Response(200, json={"object": "outline", "document_id": "doc_2", "status": "off", "data": []})
+        if path == "/v1/documents/outlines" and request.method == "PUT":
+            body = json.loads(request.content)
+            return httpx.Response(200, json=summary(body["on"], 0, collection_id=body["collection_id"]))
+        if path == "/v1/documents/outlines":
+            if "collection_id" in q:
+                return httpx.Response(200, json=summary(collection_on[q["collection_id"]], 0, collection_id=q["collection_id"]))
+            return httpx.Response(200, json=summary(False, 1, collections=[]))
+        if path.endswith("/schema"):
+            return httpx.Response(200, json=schema)
+        return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
+
+    pages = client(handler)
+    outline = pages.documents.outline("doc_1")
+    assert str(outline) == "p.12 Outlook | Group financial targets\np.13 Who we are"
+    assert outline.status == "ready" and outline.headings[2].title == "Who we are"
+    pages.documents.make_outline("doc_1")
+    assert asked[-1][:2] == ("POST", "/v1/documents/doc_1/outline")
+    turned = pages.collections.outlines("col_off", on=True)
+    assert (turned.on, turned.collection_id, turned.cost_to_finish) == (True, "col_off", 0.03)
+    assert asked[-1] == ("PUT", "/v1/documents/outlines", {"on": True, "collection_id": "col_off"})
+    assert pages.collections.outlines("col_off").on is False
+    # The tool is there when there are outlines to read, and says how to use them with search.
+    names = lambda tools: [d["name"] for d in tools.definitions]
+    on = pages.tools(collection="col_on")
+    assert "get_document_outline" in names(on) and on.outline
+    assert "leave out the parts" in next(d for d in on.definitions if d["name"] == "search_pages")["description"]
+    off = pages.tools(collection="col_off")
+    assert "get_document_outline" not in names(off)
+    assert "leave out the parts" not in next(d for d in off.definitions if d["name"] == "search_pages")["description"]
+    assert "get_document_outline" in names(pages.tools())  # some document has its own
+    assert "get_document_outline" not in names(pages.tools(collection="col_on", outline=False))
+    assert on.run("get_document_outline", {"document_id": "doc_1"}).text == str(outline)
+    assert "its collection does not make outlines" in on.run("get_document_outline", {"document_id": "doc_2"}).text

@@ -131,10 +131,12 @@ class ToolResult:
 
 class Tools:
     """list_collections, list_documents, search_documents, search_pages, read_pages, view_pages and zoom_page over a scope: a
-    collection, documents whose metadata meets a filter, or all of yours; with all of them, the agent picks a collection itself. The metadata schema is read once, when made; make new ones when the documents change."""
+    collection, documents whose metadata meets a filter, or all of yours; with all of them, the agent picks a collection itself. The metadata schema is read once, when made; make new ones when the documents change.
+    get_document_outline too when there are outlines to read (outline: True or False says so instead): the agent then
+    finds the main parts by the outline and the mentions scattered elsewhere by search, as measured best."""
 
     def __init__(self, client: PageSearch, *, collection: Collection | str | None = None,
-                 filter: dict[str, Any] | None = None):
+                 filter: dict[str, Any] | None = None, outline: bool | None = None):
         from ._client import _id
         self._client = client
         self._collection = _id(collection) if collection is not None else None
@@ -143,8 +145,22 @@ class Tools:
             self.schema = client.collections.schema(self._collection)
         else:
             self.schema = client.documents.schema(collection=self._collection, filter=filter)
+        self.outline = self._has_outlines() if outline is None else outline
         self.definitions = [self._list_collections(), self._list_documents(), self._search_documents(),
                             self._search_pages(), self._read_pages(), self._view_pages(), self._zoom_page()]
+        if self.outline:
+            self.definitions.insert(3, self._get_document_outline())
+
+    def _has_outlines(self) -> bool:
+        """Whether there are outlines to read: the collection makes them, or (without one) some document has its own.
+        Any failure to tell, such as an API without outlines, is taken as none: the tools work without them."""
+        try:
+            if self._collection is not None:
+                found = self._client.collections.outlines(self._collection)
+                return bool(found.on or found.ready > 0)
+            return self._client.outlines().ready > 0
+        except Exception:
+            return False
 
     @property
     def openai(self) -> list[dict[str, Any]]:
@@ -271,6 +287,9 @@ class Tools:
                 "likely to help, which is best, and a number brings back many pages of text. The most relevant pages "
                 "usually hold the answer: once they do, stop searching. If they do not, more_pages lists the next "
                 "most relevant: read those with read_pages, which is free, before searching again."
+                + (" With start_page and end_page it can leave out the parts a document's outline shows plainly "
+                   "cannot hold the answer, such as exhibits, signatures and certifications at the end; when in doubt "
+                   "whether a part could mention the topic, keep it." if self.outline else "")
             ),
             "input_schema": {
                 "type": "object",
@@ -285,6 +304,25 @@ class Tools:
                                                 "the document costs only its pages."},
                 },
                 "required": ["questions", "document_id"],
+            },
+        }
+
+    def _get_document_outline(self) -> dict[str, Any]:
+        return {
+            "name": "get_document_outline",
+            "description": (
+                "Every heading in a document, one page a line, each page's headings after its number "
+                "(\"p.12 Outlook | Group financial targets\"): a part runs from its heading to the next. Free. Use it "
+                "to see the document's structure and find the main parts that should hold the answer, then read their "
+                "pages with read_pages. search_pages finds the mentions scattered elsewhere, under headings that do not "
+                "name the topic, such as a figure repeated in another section, a note or a table's footnote: when the "
+                "question asks for every item of a kind, or everything the document says about a topic, do both. A "
+                "document without an outline says so: search and read it instead."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {"document_id": {"type": "string"}},
+                "required": ["document_id"],
             },
         }
 
@@ -367,6 +405,8 @@ class Tools:
                 return ToolResult(_text(self.search_documents(**input)))
             if name == "search_pages":
                 return ToolResult(_text(self.search_pages(**input)))
+            if name == "get_document_outline":
+                return ToolResult(self.get_document_outline(**input))
             if name == "read_pages":
                 return self.read_pages(**input)
             if name == "view_pages":
@@ -379,6 +419,16 @@ class Tools:
         except (TypeError, ValueError) as error:
             out = {"error": f"Bad input for {name}: {error}"}
         return ToolResult(_text(out))
+
+    def get_document_outline(self, document_id: str) -> str:
+        """The document's outline one page a line, or why it has none yet."""
+        found = self._client.documents.outline(document_id)
+        if found.status == "ready":
+            return str(found) or "The document has no headings."
+        why = {"preparing": "is still being made", "off": "is not made: its collection does not make outlines",
+               "unpaid": "is not made: the credit did not cover it", "failed": "could not be made"}
+        return (f"This document's outline {why.get(found.status, 'is not ready')}: find pages with search_pages and "
+                "read_pages.")
 
     def list_collections(self, limit: int = 20, offset: int = 0) -> dict[str, Any]:
         _paged(limit, offset)

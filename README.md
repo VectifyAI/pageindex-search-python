@@ -91,7 +91,9 @@ meets a filter, with your metadata's keys and values in its description, so the 
 `search_documents` (which documents answer a question, for when a filter cannot pick them), `search_pages` (with each
 page's text),
 `read_pages` (text, with a picture of any page that is one), `view_pages` (pages as pictures) and `zoom_page`
-(part of a page, sharper, for small print).
+(part of a page, sharper, for small print). When there are outlines to read (the collection makes them, or some of
+your documents have theirs), an eighth: `get_document_outline` (free: every heading and its page, one page a line), with
+which the agent finds the main parts by the outline and the mentions scattered elsewhere by search.
 
 ```python
 tools = client.tools(collection=reports)  # or filter=..., or neither for all your documents
@@ -111,6 +113,21 @@ from agents import Agent, Runner
 agent = Agent(name="Reports", instructions="Answer from the documents.", tools=tools.openai_agents())
 print(Runner.run_sync(agent, "What was capital expenditure in 2018?").final_output)
 ```
+
+### Outlines
+
+An outline lists every heading in a document and the page it is on. Turn outlines on for a collection, and its
+documents get theirs, as does each one added after; each is made once, paid by its pages (see
+[pricing](https://search.pageindex.ai/pricing)). The agent's tools for that collection then read them.
+
+```python
+client.collections.outlines(reports, on=True)  # its documents' outlines are made, a minute or two each
+print(client.documents.outline(report))        # p.12 Outlook | Group financial targets
+                                               # p.13 Who we are | Our strategy | ...
+tools = client.tools(collection=reports)       # with get_document_outline
+```
+
+`documents.make_outline(document)` makes one document's, whatever its collection.
 
 ### MCP
 
@@ -157,7 +174,10 @@ for c in client.citations(answer):
 | `documents.get(id)`, `documents.delete(document)` | One document; delete one. |
 | `documents.pages(document, pages=None, start=None, end=None)`, `documents.page_image(document, page, box=None)` | The text of up to 50 pages, each with how it is best read: those from `start` to `end`, then those named in `pages`; a page as PNG bytes, or with `box` (x0, y0, x1, y1 as fractions of the page from its top left) part of it, sharper. |
 | `documents.bookmarks(document)` | The PDF's own bookmarks, in their order: each with its title, level (from 1) and page. Free. |
-| `tools(collection=None, filter=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, `.openai_agents()` (OpenAI Agents SDK), `.mcp()` (an MCP server), and `.run(name, input)`. |
+| `tools(collection=None, filter=None, outline=None)` | Tools for an LLM agent: `.definitions` (Anthropic), `.openai`, `.openai_agents()` (OpenAI Agents SDK), `.mcp()` (an MCP server), and `.run(name, input)`. With `get_document_outline` when there are outlines to read; `outline=True` or `False` says so instead. |
+| `collections.outlines(collection, on=None)` | Whether the collection makes outlines, how many of its documents have theirs and what making the rest costs; `on=True` turns them on (its documents' are made, each paid once by its pages, and each added after), `on=False` off. |
+| `outlines()` | Your outlines: the collections that make them, and how many documents have theirs. |
+| `documents.outline(document)`, `documents.make_outline(document)` | A document's outline: `str()` of it gives every heading one page a line, `.status` (`ready`, `preparing`, `off`, `unpaid`, `failed`) and `.headings`; make one document's, whatever its collection. |
 | `documents.update(document, metadata=)` | Set metadata keys; `None` removes one. |
 | `collections.schema(collection)`, `documents.schema(collection=None, filter=None)` | The metadata keys the documents have: each key's types, how many documents have it, its least and greatest numbers and commonest strings. Counted as they are now; nothing is enforced. |
 | `collections.create(name)`, `.list()`, `.get(id)`, `.rename(collection, name)`, `.delete(collection)` | Named groups of your documents, as folders: a document is in at most one. Deleting one deletes its documents. |
